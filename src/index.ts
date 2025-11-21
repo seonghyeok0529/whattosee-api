@@ -16,19 +16,19 @@ import ctiRouter from "./routes/cti.js";
 import likesRouter from "./routes/likes.js";
 import searchRouter from "./routes/search.js";
 import { adminIngestRouter } from "./routes/adminIngest.js";
-import { issuesRouter } from "./routes/issues";
+import { issuesRouter } from "./routes/issues.js";
 import votesRouter from "./routes/votes.js";
-import issueCommentsRouter from "./routes/issueComments";
-import adminCluster from "./routes/adminCluster";
-import adminMetricsRouter from "./routes/adminMetrics";
-import trackRouter from "./routes/track";
+import issueCommentsRouter from "./routes/issueComments.js";
+import adminCluster from "./routes/adminCluster.js";
+import adminMetricsRouter from "./routes/adminMetrics.js";
+import trackRouter from "./routes/track.js";
 import { adminIssueRoutes } from "./routes/adminIssue.js";
 import adminAgendaRouter from "./routes/adminAgenda.js";
-import { newsClipsRouter } from "./routes/newsClips";
-import clipIssueCommentsRouter from "./routes/clipIssueComments";
-import adminNewsClipsRouter from "./routes/adminNewsClips";
-import communityRoutes from "./routes/community";
-import adminCommunityRouter from "./routes/adminCommunity";
+import { newsClipsRouter } from "./routes/newsClips.js";
+import clipIssueCommentsRouter from "./routes/clipIssueComments.js";
+import adminNewsClipsRouter from "./routes/adminNewsClips.js";
+import communityRoutes from "./routes/community.js";
+import adminCommunityRouter from "./routes/adminCommunity.js";
 
 // ✅ 단일 세션 미들웨어만 사용
 import { ensureSession } from "./middleware/ensureSession";
@@ -48,9 +48,9 @@ const allowedOrigins = [
   "http://127.0.0.1:5173",
   "http://localhost:4173",
   "http://127.0.0.1:4173",
-  "https://whattosee.app",
+  "https://whattosee.now",
   // ✅ Azure Web App 도메인 추가
-  "https://whattosee-api.azurewebsites.net",
+  "https://whattosee-api-f9f3h2fze0gncffe.koreacentral-01.azurewebsites.net",
 ];
 
 app.use(
