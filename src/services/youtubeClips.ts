@@ -1,6 +1,6 @@
 // src/services/youtubeClips.ts
 import axios from "axios";
-import prisma from "@/lib/prisma";
+import prisma from "../lib/prisma";
 import { ArticleStatus, SourceSide } from "@prisma/client";
 import OpenAI from "openai";
 import crypto from "crypto";
