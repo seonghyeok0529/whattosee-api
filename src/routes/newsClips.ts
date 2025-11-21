@@ -1,7 +1,7 @@
 // src/routes/newsClips.ts
 import { Router, type Request } from "express";
 import { prisma } from "../lib/prisma";
-import { requireAuth, type AuthedRequest } from "@/middleware/requireAuth";
+import { requireAuth, type AuthedRequest } from "../middleware/requireAuth";
 
 export const newsClipsRouter = Router();
 
