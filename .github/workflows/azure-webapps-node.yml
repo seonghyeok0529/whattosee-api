@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Node.js
@@ -31,10 +31,12 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build (optional)
-        run: npm run build --if-present
+      - name: Build
+        run: npm run build
 
-      # 🔐 GitHub → Azure 로그인 (서비스 프린시펄 + OIDC)
+      - name: Install server deps into dist
+        run: npm install --omit=dev --prefix dist
+
       - name: Azure Login
         uses: azure/login@v1
         with:
@@ -42,7 +44,6 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # 🚀 실제 배포
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v2
         with:
