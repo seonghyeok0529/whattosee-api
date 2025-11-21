@@ -1,6 +1,6 @@
 // src/routes/adminAgenda.ts
 import { Router, Request, Response, NextFunction } from "express";
-import prisma from "@/lib/prisma";
+import prisma from "../lib/prisma";
 import { requireAuth } from "@/middleware/requireAuth";
 
 const adminAgendaRouter = Router();
