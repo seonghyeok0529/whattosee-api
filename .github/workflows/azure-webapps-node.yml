@@ -7,7 +7,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: whattosee-api
-  AZURE_WEBAPP_PACKAGE_PATH: './dist'
+  AZURE_WEBAPP_PACKAGE_PATH: '.'        # 루트 전체 배포
   NODE_VERSION: '20.x'
 
 permissions:
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout
+      - name: Checkout source
         uses: actions/checkout@v4
 
       - name: Set up Node.js
@@ -31,11 +31,8 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Build
-        run: npm run build
-
-      - name: Install server deps into dist
-        run: npm install --omit=dev --prefix dist
+      - name: Build (TypeScript)
+        run: npm run build --if-present
 
       - name: Azure Login
         uses: azure/login@v1
