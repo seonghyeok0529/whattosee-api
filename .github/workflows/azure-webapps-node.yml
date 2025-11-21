@@ -7,7 +7,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: whattosee-api
-  AZURE_WEBAPP_PACKAGE_PATH: '.'
+  AZURE_WEBAPP_PACKAGE_PATH: './dist'
   NODE_VERSION: '20.x'
 
 permissions:
