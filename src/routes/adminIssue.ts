@@ -5,8 +5,8 @@ import { IssueStatus, Prisma, ClusterSuggestionStatus, UserStatus } from "@prism
 import { IssueStatus as PrismaIssueStatus } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
-import { generateIssueSummary } from "@/services/generateIssueSummary";
-import { generateIssueTitle } from "@/services/generateIssueTitle";
+import { generateIssueSummary } from "../services/generateIssueSummary";
+import { generateIssueTitle } from "../services/generateIssueTitle";
 import { OpenAI } from "openai";
 
 const openai = new OpenAI({
