@@ -8,6 +8,7 @@ import { adminAuth } from "../middleware/adminAuth";
 import { generateIssueSummary } from "../services/generateIssueSummary";
 import { generateIssueTitle } from "../services/generateIssueTitle";
 import { OpenAI } from "openai";
+import { generateSideSummary } from "../services/generateSideSummary";
 
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY,
@@ -999,7 +1000,6 @@ adminIssueRoutes.post(
         let rightSummary: string | null = null;
   
         try {
-          const { generateSideSummary } = await import("@/services/generateSideSummary");
           leftSummary = await generateSideSummary(issue.id, "left");
           rightSummary = await generateSideSummary(issue.id, "right");
         } catch (e) {
