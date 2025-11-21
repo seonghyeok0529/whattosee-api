@@ -1,8 +1,8 @@
 // src/routes/community.ts
 import { Router, Request, Response } from 'express';
 import { CommunityLounge, LinkedIssueType } from '@prisma/client';
-import prisma from '@/lib/prisma';
-import { requireAuth } from '@/middleware/requireAuth';
+import prisma from '../lib/prisma';
+import { requireAuth } from '../middleware/requireAuth';
 
 const router = Router();
 
