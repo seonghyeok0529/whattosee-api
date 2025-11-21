@@ -30,16 +30,16 @@ function newRefreshRaw() {
 }
 
 function cookieOptions() {
+  const isProd = process.env.NODE_ENV === "production";
   return {
     httpOnly: true,
-    sameSite: "lax" as const,   // ✅ 로컬은 Lax
-    secure: false,              // ✅ http 로컬이므로 false
+    sameSite: isProd ? ("none" as const) : ("lax" as const),
+    secure: isProd,
     path: "/",
-    role: true,
-    // domain: "localhost",     // 없어도 됨(명시하더라도 localhost면 OK)
     maxAge: REFRESH_DAYS * 24 * 60 * 60 * 1000,
   };
 }
+
 
 
 /** Google OAuth ===== */
