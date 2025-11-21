@@ -1,0 +1,759 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum SourceSide {
+  left
+  center
+  right
+  neutral
+}
+
+enum ArticleStatus {
+  FETCHED
+  PARSED
+  EMBEDDED
+  CLUSTERED
+  ATTACHED
+  FAILED
+}
+
+enum ParentType {
+  issue
+  agenda
+  clipIssue
+}
+
+enum Stance {
+  agree
+  neutral
+  disagree
+}
+
+enum Role {
+  user
+  admin
+}
+
+enum IssueRelationKind {
+  RELATED    // 일반 연관
+  EPISODE_OF // 상·하위 관계 (원 이슈 ↔ 파생 이슈)
+}
+
+enum IssueStatus {
+  SUGGESTED  // 추천됨 / 자동 생성됨
+  DRAFT      // 관리자 편집 중
+  PUBLISHED  // 사용자에게 공개
+  ARCHIVED   // 숨김(폐기)
+}
+
+enum UserStatus {
+  ACTIVE // 활성
+  SUSPENDED // 정지
+}
+
+// 커뮤니티 라운지 (프론트의 CommunityLounge와 값 일치)
+enum CommunityLounge {
+  popular       // ❗ 실제 post.lounge 값으로 쓰진 않고, "전체 인기" 필터용으로만 사용
+  politics
+  society
+  economy
+  international
+  tech
+  culture
+  daily
+  humor
+}
+
+// 관련 이슈 링크 타입
+enum LinkedIssueType {
+  article   // Issue
+  clip      // ClipIssue
+}
+
+model User {
+  id            String         @id @default(cuid())
+  email         String?        @unique
+  username      String?
+  nickname      String?
+  
+  kakaoId       String?        @unique
+  naverId       String?        @unique
+  googleId      String?        @unique
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  accounts      Account[] // Account.user <-> User.accounts
+  refreshTokens RefreshToken[] // RefreshToken.user <-> User.refreshTokens
+
+  bio             String? // 한 줄 소개
+  interests       Json?
+  tosAgreedAt     DateTime?
+  privacyAgreedAt DateTime?
+  marketingAgreed Boolean?  @default(false)
+
+  ctiType   String?
+  ctiScores Json?
+
+  agendas     Agenda[]
+  comments    AgendaComment[]
+  likes       AgendaLike[]
+  CommentLike CommentLike[]
+
+  votes             Vote[] // Vote.user <-> User.votes
+  issueComments     IssueComment[] // IssueComment.user <-> User.issueComments
+  issueCommentLikes IssueCommentLike[] @relation("UserIssueCommentLikes")
+
+  clipIssueComments     ClipIssueComment[]
+  clipIssueCommentLikes ClipIssueCommentLike[]
+
+  commentReports CommentReport[]
+
+  communityPosts         CommunityPost[]        @relation("UserCommunityPosts")
+  communityPostComments  CommunityPostComment[] @relation("UserCommunityPostComments")
+  communityPostLikes     CommunityPostLike[]    @relation("UserCommunityPostLikes")
+
+  // 🔥 열람 로그
+  articleViewLogs  ArticleViewLog[]
+  newsClipViewLogs NewsClipViewLog[]
+
+  role      Role     @default(user)
+  isAdmin   Boolean  @default(false)
+  status    UserStatus @default(ACTIVE)
+}
+
+model Account {
+  id                String   @id @default(cuid())
+  userId            String
+  provider          String // 'google' | 'kakao' | 'naver' | 'apple'
+  providerAccountId String
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([provider, providerAccountId])
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model PageView {
+  id         String     @id @default(cuid())
+  parentType ParentType
+  parentId   String
+
+  userId     String?    // 로그인 사용자면 채움
+  sessionId  String?    // 익명/로그인 공통 식별 (쿠키로 발급)
+  ipHash     String?    // (선택) 프록시/봇 탐지·보조용
+  userAgent  String?    // (선택)
+
+  dayKey     String     // YYYY-MM-DD (하루 중복 방지 키)
+  createdAt  DateTime   @default(now())
+
+  @@index([parentType, parentId, dayKey])
+  @@unique([parentType, parentId, sessionId, dayKey], map: "uniq_view_per_day_by_session")
+}
+
+// 🔥 기사 열람 로그: 특정 Source(언론 기사) 기준
+model ArticleViewLog {
+  id        String     @id @default(cuid())
+  userId    String
+  sourceId  String
+  side      SourceSide
+  createdAt DateTime   @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  source Source @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([sourceId])
+}
+
+model Agenda {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  title        String
+  content      String
+  tags         Json?
+  likesCount   Int      @default(0)
+  commentCount Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  deletedAt    DateTime?
+
+  comments      AgendaComment[] @relation("Agenda_Comments")
+  likes         AgendaLike[]
+  commentLikes  CommentLike[]
+  bestCommentId String?         @unique
+  bestComment   AgendaComment?  @relation("Agenda_BestComment", fields: [bestCommentId], references: [id])
+
+  @@index([title])
+  @@index([createdAt])
+  @@index([likesCount, commentCount])
+}
+
+model AgendaComment {
+  id        String   @id @default(cuid())
+  agendaId  String
+  agenda    Agenda   @relation("Agenda_Comments", fields: [agendaId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  content   String
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  isDeleted     Boolean   @default(false)
+  deletedAt     DateTime?
+  reportedCount Int       @default(0)
+
+  likedBy CommentLike[]
+  bestFor Agenda?       @relation("Agenda_BestComment")
+}
+
+model AgendaLike {
+  userId    String
+  agendaId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id])
+  agenda Agenda @relation(fields: [agendaId], references: [id])
+
+  @@id([userId, agendaId])
+  @@index([agendaId])
+}
+
+model CommentLike {
+  userId    String
+  commentId String
+  createdAt DateTime @default(now())
+
+  user     User          @relation(fields: [userId], references: [id])
+  comment  AgendaComment @relation(fields: [commentId], references: [id])
+  Agenda   Agenda?       @relation(fields: [agendaId], references: [id])
+  agendaId String?
+
+  @@id([userId, commentId])
+  @@index([commentId])
+}
+
+model Issue {
+  id        String   @id @default(uuid())
+  title     String
+  summary   String?
+  tags      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+  leftSummary  String?
+  rightSummary String?
+
+  dedupKey String? @unique
+
+  body    String?
+  sources Source[]
+  persons PersonRef[]
+
+  comments           IssueComment[] // IssueComment.issue <-> Issue.comments
+  clusterSuggestions ClusterSuggestion[] @relation(name: "IssueToClusterSuggestions")
+
+  status IssueStatus @default(SUGGESTED)
+
+  relatedFrom IssueRelation[] @relation("IssueRelationFrom")
+  relatedTo   IssueRelation[] @relation("IssueRelationTo")
+
+  communityLinks CommunityPostIssueLink[] @relation("IssueCommunityLinks")
+}
+
+model IssueRelation {
+  id           String   @id @default(cuid())
+  fromIssueId  String
+  toIssueId    String
+  relationType String?  // 예: "RELATED" | "CONTINUATION" | "DUPLICATE"
+  confidence   Float?   // 0~1 추천 점수 (선택)
+  createdAt    DateTime @default(now())
+
+  from Issue @relation("IssueRelationFrom", fields: [fromIssueId], references: [id], onDelete: Cascade)
+  to   Issue @relation("IssueRelationTo",   fields: [toIssueId],   references: [id], onDelete: Cascade)
+
+  @@unique([fromIssueId, toIssueId])
+  @@index([toIssueId])
+}
+
+model IssueComment {
+  id        String   @id @default(cuid())
+  issueId   String
+  userId    String? // 익명 댓글 허용 시 nullable
+  content   String
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  isDeleted     Boolean   @default(false)
+  deletedAt     DateTime?
+  reportedCount Int       @default(0)
+
+  issue Issue @relation(fields: [issueId], references: [id])
+  user  User? @relation(fields: [userId], references: [id])
+
+  // ✅ 이 이름과 아래 IssueCommentLike.comment 의 relation 이름이 정확히 일치해야 함
+  likedBy IssueCommentLike[] @relation("IssueCommentLikes")
+
+  @@index([issueId, createdAt])
+}
+
+model IssueCommentLike {
+  userId    String
+  commentId String
+  createdAt DateTime @default(now())
+
+  // ✅ 관계 이름 일치 (User 쪽과 "UserIssueCommentLikes", IssueComment 쪽과 "IssueCommentLikes")
+  user    User         @relation("UserIssueCommentLikes", fields: [userId], references: [id], onDelete: Cascade)
+  comment IssueComment @relation("IssueCommentLikes", fields: [commentId], references: [id], onDelete: Cascade)
+
+  @@id([userId, commentId]) // 유저당 한 번만
+  @@index([commentId])
+}
+
+model CommentReport {
+  id         String     @id @default(cuid())
+  parentType ParentType
+  commentId  String
+  userId     String
+  reason     String?
+  createdAt  DateTime   @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([parentType, commentId, userId], name: "report_unique_triplet") // 같은 유저의 중복 신고 방지
+  @@index([parentType, commentId])
+}
+
+model Source {
+  id        String     @id @default(uuid())
+  issueId   String
+  issue     Issue      @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  outlet    String
+  title     String
+  url       String     @unique
+  side      SourceSide
+  createdAt DateTime   @default(now())
+
+  suggestionArticles ClusterSuggestionArticle[] @relation(name: "SourceToSuggestionArticles")
+
+  // 🔥 기사 열람 로그 역참조
+  articleViewLogs ArticleViewLog[]
+}
+
+model PersonRef {
+  id      String  @id @default(uuid())
+  issueId String
+  issue   Issue   @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  name    String
+  role    String?
+}
+
+model RawArticle {
+  id          String        @id @default(uuid())
+  outlet      String
+  side        SourceSide
+  url         String        @unique
+  title       String
+  publishedAt DateTime?
+  html        String?
+  text        String?
+  hash        String
+  embedding   Bytes?
+  status      ArticleStatus @default(FETCHED)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  clusterKey  String?
+
+  suggestionArticles ClusterSuggestionArticle[] @relation(name: "RawToSuggestionArticles")
+
+  @@index([status])
+  @@index([clusterKey])
+}
+
+enum ClusterSuggestionStatus {
+  PENDING // 대기(검수 전)
+  APPROVED // 확정(이슈로 승격)
+  REJECTED // 기각
+  MERGED // 다른 제안과 병합됨
+  SPLIT // 쪼개짐
+}
+
+model Vote {
+  id         String     @id @default(cuid())
+  parentType ParentType
+  parentId   String
+  userId     String?
+  sessionId  String?
+  ctiType    String?
+  stance     Stance
+  createdAt  DateTime   @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@unique([parentType, parentId, userId])
+  @@unique([parentType, parentId, sessionId])
+  @@index([parentType, parentId])
+}
+
+model ClusterSuggestion {
+  id          String                  @id @default(cuid())
+  key         String                  @unique
+  title       String
+  summary     String?
+  confidence  Float
+  windowStart DateTime?
+  windowEnd   DateTime?
+  status      ClusterSuggestionStatus @default(PENDING)
+
+  // 관계
+  articles ClusterSuggestionArticle[]
+  issue    Issue?                     @relation(name: "IssueToClusterSuggestions", fields: [issueId], references: [id], onDelete: SetNull)
+  issueId  String?
+
+  articlesCount      Int      @default(0)
+
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  ClusterDecisionLog ClusterDecisionLog[]
+
+  @@index([status, createdAt])
+  @@index([issueId])
+}
+
+model ClusterSuggestionArticle {
+  id String @id @default(cuid())
+
+  // ↔ ClusterSuggestion (필수)
+  suggestion   ClusterSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  suggestionId String
+
+  // 원본 매핑(있으면 연결, 없으면 스냅샷 필드 사용)
+  raw          RawArticle? @relation(name: "RawToSuggestionArticles", fields: [rawArticleId], references: [id], onDelete: SetNull)
+  rawArticleId String?
+
+  source   Source? @relation(name: "SourceToSuggestionArticles", fields: [sourceId], references: [id], onDelete: SetNull)
+  sourceId String?
+
+  // 스냅샷
+  url         String
+  title       String?
+  outlet      String?
+  side        SourceSide?
+  publishedAt DateTime?
+  summary     String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([suggestionId, url])
+  @@index([rawArticleId])
+  @@index([sourceId])
+}
+
+// 관리자 행동 로그(학습 데이터)
+model ClusterDecisionLog {
+  id           String   @id @default(cuid())
+  suggestionId String
+  action       String // APPROVE | REJECT | MERGE | SPLIT | MOVE
+  detail       Json?
+  createdAt    DateTime @default(now())
+
+  suggestion ClusterSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+}
+
+model RawClip {
+  id          String      @id @default(cuid())
+  youtubeId   String      @unique
+  title       String
+  description String?
+  channel     String
+  side        SourceSide  // 기존 enum 재사용 (left/center/right/neutral)
+  url         String      @unique
+  thumbnail   String?
+  publishedAt DateTime?
+  text        String?     // 자막/설명/요약 등을 합친 텍스트
+  embedding   Bytes?
+  status      ArticleStatus @default(FETCHED) // 기존 enum 그냥 재사용해도 됨
+  clusterKey  String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  duration    String?       // 유튜브에서 가져온 재생시간
+
+  suggestions ClipClusterSuggestionItem[]
+
+  clipLinks   ClipIssueClip[]
+
+  // 🔥 뉴스 클립 열람 로그 역참조
+  viewLogs    NewsClipViewLog[]
+
+  @@index([status])
+  @@index([clusterKey])
+}
+
+enum ClipClusterStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model ClipClusterSuggestion {
+  id          String            @id @default(cuid())
+  key         String            @unique
+  title       String
+  summary     String?
+  confidence  Float
+  windowStart DateTime?
+  windowEnd   DateTime?
+  status      ClipClusterStatus @default(PENDING)
+
+  items       ClipClusterSuggestionItem[]
+
+  clipIssue   ClipIssue? @relation("ClipClusterToClipIssue", fields: [clipIssueId], references: [id], onDelete: SetNull)
+  clipIssueId String?    @unique
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ClipClusterSuggestionItem {
+  id String @id @default(cuid())
+
+  suggestion   ClipClusterSuggestion @relation(fields: [suggestionId], references: [id], onDelete: Cascade)
+  suggestionId String
+
+  rawClip   RawClip? @relation(fields: [rawClipId], references: [id], onDelete: SetNull)
+  rawClipId String?
+
+  // 스냅샷
+  youtubeId   String
+  url         String
+  title       String?
+  channel     String?
+  side        SourceSide?
+  publishedAt DateTime?
+  summary     String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([suggestionId, youtubeId])
+}
+
+model ClipIssue {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  category    String?
+  thumbnail   String?
+  isHot       Boolean  @default(false)
+
+  aiSummary   String?
+  progressiveSummary String?  // 진보 성향 클립 요약
+  conservativeSummary String? // 보수 성향 클립 요약
+
+  clipCount   Int      @default(0)
+  totalViews  Int      @default(0)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  comments    ClipIssueComment[]
+  clips       ClipIssueClip[]
+
+  communityLinks    CommunityPostIssueLink[] @relation("ClipIssueCommunityLinks")
+  clusterSuggestion ClipClusterSuggestion?   @relation("ClipClusterToClipIssue")
+
+  // 🔥 뉴스 클립 열람 로그 역참조
+  viewLogs    NewsClipViewLog[]
+
+  // 필요하면 pageView도 ParentType = clipIssue로 재사용 가능
+}
+
+model ClipIssueComment {
+  id          String   @id @default(cuid())
+  clipIssueId String
+  clipIssue   ClipIssue @relation(fields: [clipIssueId], references: [id])
+
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+
+  content   String
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+
+  isDeleted     Boolean   @default(false)
+  deletedAt     DateTime?
+  reportedCount Int       @default(0)
+
+  likedBy ClipIssueCommentLike[]
+
+  @@index([clipIssueId, createdAt])
+}
+
+model ClipIssueCommentLike {
+  userId    String
+  commentId String
+  createdAt DateTime @default(now())
+
+  user    User            @relation(fields: [userId], references: [id])
+  comment ClipIssueComment @relation(fields: [commentId], references: [id])
+
+  @@id([userId, commentId])
+  @@index([commentId])
+}
+
+model ClipIssueClip {
+  id          String     @id @default(cuid())
+  clipIssueId String
+  rawClipId   String
+  side        SourceSide  // left / center / right / neutral
+
+  clipIssue   ClipIssue  @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+  rawClip     RawClip    @relation(fields: [rawClipId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime   @default(now())
+
+  @@unique([clipIssueId, rawClipId])
+  @@index([rawClipId])
+}
+
+// 🔥 뉴스 클립 열람 로그: 진보/공영/보수 그룹 기준
+model NewsClipViewLog {
+  id          String   @id @default(cuid())
+  userId      String
+  clipIssueId String?
+  rawClipId   String?
+  // "progressive" | "public" | "conservative"
+  group       String
+  createdAt   DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clipIssue ClipIssue? @relation(fields: [clipIssueId], references: [id], onDelete: SetNull)
+  rawClip   RawClip?   @relation(fields: [rawClipId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([clipIssueId])
+  @@index([rawClipId])
+}
+
+model CommunityPost {
+  id           String           @id @default(cuid())
+  userId       String
+  user         User             @relation("UserCommunityPosts", fields: [userId], references: [id])
+
+  lounge       CommunityLounge  // politics, society, ... (popular는 직접 안 씀)
+  title        String
+  content      String
+  thumbnail    String?
+  images       Json?        // ["https://.../1.png", "https://.../2.jpg"]
+  poll        CommunityPostPoll?    // 1:1
+
+  likesCount   Int              @default(0)
+  commentCount Int              @default(0)
+  viewsCount   Int              @default(0)
+  isHot        Boolean          @default(false)
+  isAnonymous  Boolean          @default(false)
+
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  comments     CommunityPostComment[]
+  links        CommunityPostIssueLink[]
+  likes        CommunityPostLike[] @relation("PostCommunityPostLikes")
+
+  @@index([lounge, createdAt])
+  @@index([lounge, likesCount, commentCount])
+}
+
+model CommunityPostComment {
+  id        String   @id @default(cuid())
+  postId    String
+  post      CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  userId    String?
+  user      User?    @relation("UserCommunityPostComments", fields: [userId], references: [id])
+
+  content   String
+  likes     Int      @default(0)
+  createdAt DateTime @default(now())
+  isAnonymous  Boolean  @default(false)
+
+  isDeleted Boolean  @default(false)
+
+  @@index([postId, createdAt])
+}
+
+model CommunityPostIssueLink {
+  id          String        @id @default(cuid())
+  postId      String
+  post        CommunityPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  kind        LinkedIssueType
+
+  // 🔹 인터넷 기사 이슈
+  issueId     String?
+  issue       Issue?        @relation("IssueCommunityLinks", fields: [issueId], references: [id])
+
+  // 🔹 뉴스 클립 이슈
+  clipIssueId String?
+  clipIssue   ClipIssue?    @relation("ClipIssueCommunityLinks", fields: [clipIssueId], references: [id])
+
+  @@index([postId])
+  @@index([issueId])
+  @@index([clipIssueId])
+}
+
+model CommunityPostPoll {
+  id        String   @id @default(cuid())
+  postId    String   @unique
+  post      CommunityPost @relation(fields: [postId], references: [id])
+
+  question  String
+  // options: [{ id: "1", label: "떡볶이" }, ...]
+  options   Json
+  createdAt DateTime @default(now())
+  closedAt  DateTime?
+
+  votes     CommunityPostPollVote[] @relation("CommunityPostPollVotes")
+}
+
+model CommunityPostPollVote {
+  id        String   @id @default(cuid())
+  pollId    String
+  poll      CommunityPostPoll @relation("CommunityPostPollVotes", fields: [pollId], references: [id])
+
+  userId    String?
+  sessionId String?      // 로그인 안 한 사람 구분용(optional)
+  optionId  String
+
+  createdAt DateTime @default(now())
+
+  @@index([pollId])
+  @@unique([pollId, userId])
+  @@unique([pollId, sessionId])
+}
+
+model CommunityPostLike {
+  userId    String
+  postId    String
+  createdAt DateTime @default(now())
+
+  user User          @relation("UserCommunityPostLikes", fields: [userId], references: [id], onDelete: Cascade)
+  post CommunityPost @relation("PostCommunityPostLikes", fields: [postId], references: [id], onDelete: Cascade)
+
+  @@id([userId, postId])
+  @@index([postId])
+}

@@ -1,0 +1,38 @@
+[
+    {
+      "outlet": "연합뉴스",
+      "url": "https://www.yna.co.kr/politics/rss",
+      "side": "center"
+    },
+    {
+      "outlet": "한겨레",
+      "url": "https://www.hani.co.kr/rss/politics/",
+      "side": "left"
+    },
+    {
+      "outlet": "경향신문",
+      "url": "http://www.khan.co.kr/rss/rssdata/politics.xml",
+      "side": "left"
+    },
+    {
+      "outlet": "오마이뉴스",
+      "url": "https://rss.ohmynews.com/politics.xml",
+      "side": "left"
+    },
+    {
+      "outlet": "조선일보",
+      "url": "https://www.chosun.com/arc/outboundfeeds/rss/category/politics/?outputType=xml",
+      "side": "right"
+    },
+    {
+      "outlet": "국민일보",
+      "url": "https://www.kmib.co.kr/rss/data/kmibPolRss.xml",
+      "side": "right"
+    },
+    {
+      "outlet": "동아일보",
+      "url": "https://rss.donga.com/politics.xml",
+      "side": "right"
+    }
+  ]
+  
