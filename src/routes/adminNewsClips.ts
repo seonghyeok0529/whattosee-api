@@ -4,13 +4,13 @@ import { prisma } from "../lib/prisma";
 import {
   ingestYoutubeNewsClips,
   clusterYoutubeNewsClips,
-} from "@/services/youtubeClips";
+} from "../services/youtubeClips";
 
 // ✅ adminIssueRoutes와 같은 경로 스타일 사용
 import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
 
-import { refreshClipIssueAIFields } from "@/services/clipIssueAi";
+import { refreshClipIssueAIFields } from "../services/clipIssueAi";
 
 const router = Router();
 
