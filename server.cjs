@@ -7,25 +7,25 @@ const cookieParser = require('cookie-parser');
 
 const app = express();
 
-// ✅ 배포(HTTPS/리버스 프록시) 대비: secure 쿠키/리다이렉트 올바르게 동작
+// 배포 환경 대비
 app.set('trust proxy', 1);
 
-// ✅ CORS: origin 고정 + credentials 허용 (쿠키 전달을 위해 필수)
 const CLIENT_URL = process.env.CLIENT_URL || 'http://localhost:3000';
+
 app.use(
   cors({
     origin: CLIENT_URL,
-    credentials: true, // << 매우 중요
+    credentials: true,
   })
 );
-// (선택) preflight 수동 허용
-app.options('*', cors({ origin: CLIENT_URL, credentials: true }));
+
+// ❌ 문제 원인 제거
+// app.options('*', cors({ origin: CLIENT_URL, credentials: true }));
 
 app.use(express.json());
 app.use(cookieParser());
 app.use(morgan('dev'));
 
-// /api 프리픽스
 const api = express.Router();
 
 api.get('/issues', (req, res) => {
@@ -50,12 +50,10 @@ api.get('/agendas', (req, res) => {
 
 app.use('/api', api);
 
-// 404
+// 404 핸들러
 app.use((req, res) =>
   res.status(404).json({ error: 'Not found', path: req.path })
 );
 
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () =>
-  console.log(`✅ API server running on port ${PORT}`)
-);
+app.listen(PORT, () => console.log(`✅ API server running on port ${PORT}`));
