@@ -1,7 +1,7 @@
 // src/routes/adminCommunity.ts
 import { Router, Request, Response } from "express";
 import { CommunityLounge } from "@prisma/client";
-import prisma from "@/lib/prisma";
+import prisma from "../lib/prisma";
 import { requireAuth } from "@/middleware/requireAuth";
 import { adminAuth } from "@/middleware/adminAuth";
 
