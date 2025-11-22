@@ -266,6 +266,133 @@ adminIssueRoutes.get("/issues/search", async (req, res) => {
     }
   });
 
+/* ─────────────────────────────────────────────
+   X. 추천 이슈 기반 자동 이슈 생성
+   POST /api/admin/issues/auto-generate
+───────────────────────────────────────────── */
+adminIssueRoutes.post(
+  "/issues/auto-generate",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { take, minArticles, days } = req.body as {
+        take?: number;
+        minArticles?: number;
+        days?: number;
+      };
+
+      const now = new Date();
+      const daysWindow = typeof days === "number" && days > 0 ? days : 2;
+      const fromDate = new Date(
+        now.getTime() - daysWindow * 24 * 60 * 60 * 1000
+      );
+
+      const takeLimit = Math.min(typeof take === "number" ? take : 20, 100);
+
+      const suggestions = await prisma.clusterSuggestion.findMany({
+        where: {
+          status: ClusterSuggestionStatus.PENDING,
+          issueId: null,
+          createdAt: {
+            gte: fromDate,
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: takeLimit,
+        include: {
+          articles: true,
+        },
+      });
+
+      const minCount = typeof minArticles === "number" && minArticles > 0 ? minArticles : 2;
+
+      const filtered = suggestions.filter(
+        (s) => (s.articles?.length ?? 0) >= minCount
+      );
+
+      const createdIssueIds: string[] = [];
+
+      for (const sug of filtered) {
+        // 1) 이슈 생성 (일단 status는 DRAFT)
+        const issue = await prisma.issue.create({
+          data: {
+            title: sug.title ?? "(제목 없음)",
+            summary: sug.summary ?? null,
+            tags: [], // 필요하면 키워드 매핑
+            status: IssueStatus.DRAFT,
+          },
+        });
+
+        createdIssueIds.push(issue.id);
+
+        // 2) 기사 URL 리스트 추출
+        const articleUrls = (sug.articles ?? [])
+          .map((a) => (a.url ?? "").trim())
+          .filter((u) => u.length > 0);
+
+        // 3) Source 동기화
+        await syncIssueSourcesByUrls(issue.id, articleUrls);
+
+        // 4) clusterSuggestion 상태 업데이트 (APPROVED + issueId 연결)
+        await prisma.clusterSuggestion.update({
+          where: { id: sug.id },
+          data: {
+            status: ClusterSuggestionStatus.APPROVED,
+            issueId: issue.id,
+          },
+        });
+
+        // 5) 제목/요약 AI로 한 번 더 다듬기 (실패해도 전체 플로우는 계속)
+        try {
+          const fullIssue = await prisma.issue.findUnique({
+            where: { id: issue.id },
+            include: { sources: true },
+          });
+
+          if (fullIssue) {
+            const aiTitle = await generateIssueTitle(fullIssue as any);
+            const aiSummary = await generateIssueSummary(fullIssue as any);
+
+            await prisma.issue.update({
+              where: { id: issue.id },
+              data: {
+                ...(aiTitle?.trim()?.length
+                  ? { title: aiTitle.trim() }
+                  : {}),
+                ...(aiSummary?.trim()?.length
+                  ? { summary: aiSummary.trim() }
+                  : {}),
+              },
+            });
+          }
+        } catch (e) {
+          console.error(
+            "[/api/admin/issues/auto-generate] AI 생성 실패:",
+            e
+          );
+        }
+      }
+
+      return res.json({
+        ok: true,
+        createdIssueCount: createdIssueIds.length,
+        issueIds: createdIssueIds,
+      });
+    } catch (e: any) {
+      console.error(
+        "[POST /api/admin/issues/auto-generate] error:",
+        e
+      );
+      return res.status(500).json({
+        ok: false,
+        error: "INTERNAL_ERROR",
+        detail: String(e?.message ?? e),
+      });
+    }
+  }
+);
+
 
 /* ─────────────────────────────────────────────
    10. 추천 이슈 목록 (IssuesTab "추천 이슈" 탭용)
