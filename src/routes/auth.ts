@@ -271,11 +271,10 @@ router.get("/kakao", (_req, res) => {
       client_id: process.env.KAKAO_CLIENT_ID!,
       redirect_uri: process.env.KAKAO_REDIRECT_URI!,
       response_type: "code",
-      // 🔽 1) 가장 안전한 방법: scope 자체 제거 (기본 닉네임/프로필만)
-      // scope: "profile_nickname",
-
       state,
     }).toString();
+
+  console.log("[KAKAO AUTH URL]", authUrl);  // 🔥 이거 추가
 
   return res.redirect(authUrl);
 });
