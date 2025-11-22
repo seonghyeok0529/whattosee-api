@@ -264,17 +264,22 @@ const stateCookieOpts = {
 router.get("/kakao", (_req, res) => {
   const state = randomBytes(16).toString("hex");
   res.cookie(OAUTH_STATE_COOKIE, state, stateCookieOpts);
+
   const authUrl =
     "https://kauth.kakao.com/oauth/authorize?" +
     new URLSearchParams({
       client_id: process.env.KAKAO_CLIENT_ID!,
       redirect_uri: process.env.KAKAO_REDIRECT_URI!,
       response_type: "code",
-      scope: "account_email profile_nickname",
+      // 🔽 1) 가장 안전한 방법: scope 자체 제거 (기본 닉네임/프로필만)
+      // scope: "profile_nickname",
+
       state,
     }).toString();
+
   return res.redirect(authUrl);
 });
+
 
 router.get("/kakao/callback", async (req, res) => {
   try {
