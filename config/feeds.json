@@ -11,12 +11,12 @@
     },
     {
       "outlet": "경향신문",
-      "url": "http://www.khan.co.kr/rss/rssdata/politics.xml",
+      "url": "https://www.khan.co.kr/rss/rssdata/politic_news.xml",
       "side": "left"
     },
     {
       "outlet": "오마이뉴스",
-      "url": "https://rss.ohmynews.com/politics.xml",
+      "url": "https://rss.ohmynews.com/rss/politics.xml",
       "side": "left"
     },
     {
