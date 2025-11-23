@@ -2,6 +2,7 @@
 import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import prisma from "../../lib/prisma.js";
+import { extractThumbnailFromHtml } from "./extractThumbnail.js";
 
 export async function parseArticles(limit = 100) {
   const { default: got } = await import("got");
@@ -18,6 +19,7 @@ export async function parseArticles(limit = 100) {
       const dom = new JSDOM(html, { url: a.url });
       const reader = new Readability(dom.window.document).parse();
       const text = (reader?.textContent || "").trim();
+
       if (!text || text.length < 300) {
         await prisma.rawArticle.update({
           where: { id: a.id },
@@ -25,9 +27,17 @@ export async function parseArticles(limit = 100) {
         });
         continue;
       }
+
+      const thumbnail = extractThumbnailFromHtml(html, a.url);
+
       await prisma.rawArticle.update({
         where: { id: a.id },
-        data: { html, text, status: "PARSED" },
+        data: {
+          html,
+          text,
+          status: "PARSED",
+          thumbnail: thumbnail ?? undefined,
+        },
       });
     } catch {
       await prisma.rawArticle.update({
