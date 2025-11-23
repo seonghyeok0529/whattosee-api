@@ -257,6 +257,7 @@ model Issue {
   updatedAt DateTime @default(now()) @updatedAt
   leftSummary  String?
   rightSummary String?
+  thumbnailUrl String?
 
   dedupKey String? @unique
 
