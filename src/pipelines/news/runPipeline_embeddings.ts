@@ -13,26 +13,35 @@ import {
   Prisma,
   SourceSide as PrismaSide,
 } from "@prisma/client";
+import { parseArticles } from "./parseArticle.js"; // ✅ 추가
 
 /** ───────────────────────────────────────────────────────────────
  *  side 매핑 (문자열/뉴스타입 ↔ Prisma enum)
  *  ───────────────────────────────────────────────────────────── */
 function toPrismaSide(s?: string | null): PrismaSide {
   switch ((s ?? "").toLowerCase()) {
-    case "left":    return PrismaSide.left;
-    case "right":   return PrismaSide.right;
-    case "neutral": return PrismaSide.neutral;
+    case "left":
+      return PrismaSide.left;
+    case "right":
+      return PrismaSide.right;
+    case "neutral":
+      return PrismaSide.neutral;
     case "center":
-    default:        return PrismaSide.center;
+    default:
+      return PrismaSide.center;
   }
 }
 function toNewsSide(s?: string | null): NewsSide {
   switch ((s ?? "").toLowerCase()) {
-    case "left":    return "left";
-    case "right":   return "right";
-    case "neutral": return "neutral";
+    case "left":
+      return "left";
+    case "right":
+      return "right";
+    case "neutral":
+      return "neutral";
     case "center":
-    default:        return "center";
+    default:
+      return "center";
   }
 }
 
@@ -108,7 +117,22 @@ export async function runPipeline(scraped: RawArticleLite[]) {
     }
   }
 
-  // 2) 최근 DB 기사 로드
+  // 1.5) ✅ FETCHED 기사들 본문 파싱 (html/text 채우고 PARSED로 전환)
+  // 너무 많이 돌지 않도록 limit은 ENV로 컨트롤
+  const parseLimit = Number(process.env.NEWS_PARSE_LIMIT ?? 200);
+  try {
+    console.log(
+      `[NEWS] parseArticles start (limit=${parseLimit}, env.NEWS_PARSE_LIMIT=${process.env.NEWS_PARSE_LIMIT})`
+    );
+    await parseArticles(parseLimit);
+    console.log("[NEWS] parseArticles done");
+  } catch (e) {
+    console.error("[NEWS] parseArticles error", e);
+    // 클러스터링은 일단 텍스트 있는 애들 위주로라도 계속 돌게 두고,
+    // 여기서 프로세스를 죽이진 않음
+  }
+
+  // 2) 최근 DB 기사 로드 (FETCHED + PARSED)
   const recentFromDB = await prisma.rawArticle.findMany({
     where: {
       createdAt: { gte: since },
@@ -141,7 +165,9 @@ export async function runPipeline(scraped: RawArticleLite[]) {
     if ((a as any).summary) base.summary = String((a as any).summary);
     return base;
   });
-  const normalizedDB: RawArticleLite[] = recentFromDB.map(dbRowToRawArticleLite);
+  const normalizedDB: RawArticleLite[] = recentFromDB.map(
+    dbRowToRawArticleLite
+  );
 
   const merged = [...normalizedScraped, ...normalizedDB];
   const dedupMap = new Map<string, RawArticleLite>();
