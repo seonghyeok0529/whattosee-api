@@ -53,7 +53,8 @@ function uniqueTop(
     .forEach((s: SimpleSource) => {
       const name = s.outlet?.trim();
       if (!name) return;
-      // “주요 언론만” 보여주려면 MAJOR_OUTLETS 체크
+      // “주요 언론만” 보여주려면 MAJOR_OUTLETS 체크 추가 가능
+      // if (!MAJOR_OUTLETS.has(name)) return;
       if (!seen.has(name)) {
         seen.add(name);
         picked.push(name);
@@ -102,6 +103,7 @@ issuesRouter.get("/top-today", async (_req, res) => {
         summary: true,
         createdAt: true,
         updatedAt: true,
+        thumbnailUrl: true, // 🔹 썸네일 필드
         sources: {
           select: {
             outlet: true,
@@ -145,6 +147,7 @@ issuesRouter.get("/top-today", async (_req, res) => {
           leftSources,
           rightSources,
           firstSource,
+          thumbnailUrl: i.thumbnailUrl ?? null, // 🔹 카드용 썸네일
           score,
         };
       })
@@ -180,6 +183,7 @@ issuesRouter.get("/", async (req, res) => {
       tags: true,
       createdAt: true,
       updatedAt: true,
+      thumbnailUrl: true, // 🔹 썸네일 필드
       sources: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -212,6 +216,7 @@ issuesRouter.get("/", async (req, res) => {
       leftSources,
       rightSources,
       firstSource,
+      thumbnailUrl: i.thumbnailUrl ?? null, // 🔹 카드에서 바로 사용
     };
   });
 
@@ -242,6 +247,7 @@ issuesRouter.get("/:id", async (req, res) => {
       createdAt: true,
       updatedAt: true,
       body: true,
+      thumbnailUrl: true, // 🔹 상세에서도 썸네일 제공
       sources: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -286,6 +292,7 @@ issuesRouter.get("/:id", async (req, res) => {
       leftSources,
       rightSources,
       firstSource,
+      thumbnailUrl: issue.thumbnailUrl ?? null, // 🔹 상세 상단 이미지용
       sources: srcs.map((s) => ({
         id: (s as any).id,
         outlet: s.outlet,
