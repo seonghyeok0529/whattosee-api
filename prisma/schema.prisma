@@ -378,6 +378,7 @@ model RawArticle {
   createdAt   DateTime      @default(now())
   updatedAt   DateTime      @updatedAt
   clusterKey  String?
+  thumbnail   String?
 
   suggestionArticles ClusterSuggestionArticle[] @relation(name: "RawToSuggestionArticles")
 
