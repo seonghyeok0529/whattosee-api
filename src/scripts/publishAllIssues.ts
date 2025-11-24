@@ -1,5 +1,5 @@
 // scripts/publishAllIssues.ts
-import prisma from "../lib/prisma";
+import prisma from "../lib/prisma.js";
 import { IssueStatus } from "@prisma/client";
 
 async function main() {
