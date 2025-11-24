@@ -35,6 +35,18 @@ type SimplePerson = {
   role: string | null;
 };
 
+type IssueListItem = {
+  id: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  updatedAt: string;
+  leftSources: string[];
+  rightSources: string[];
+  firstSource?: string;
+  thumbnailUrl: string | null;
+};
+
 /** 유니크 보장 + 정렬 + 상한 */
 function uniqueTop(
   items: SimpleSource[],
@@ -80,6 +92,41 @@ function firstSourceName(items: { outlet: string; createdAt?: Date | null }[]) {
   return sorted[0]?.outlet;
 }
 
+/** Issue + sources → 리스트에서 쓰는 공통 형태로 변환 */
+function toIssueListItem(
+  i: {
+    id: string;
+    title: string;
+    summary: string | null;
+    tags: any;
+    createdAt: Date;
+    updatedAt: Date;
+    thumbnailUrl: string | null;
+  },
+  srcs: SimpleSource[]
+): IssueListItem {
+  const leftSources = uniqueTop(srcs, "left", 4);
+  const rightSources = uniqueTop(srcs, "right", 4);
+  const firstSource = firstSourceName(srcs);
+  const latest = srcs
+    .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
+    .reduce((a: number, b: number) => Math.max(a, b), 0);
+
+  return {
+    id: i.id,
+    title: i.title,
+    summary: i.summary ?? "",
+    tags: Array.isArray(i.tags) ? (i.tags as string[]) : [],
+    updatedAt: latest
+      ? new Date(latest).toISOString()
+      : i.updatedAt.toISOString(),
+    leftSources,
+    rightSources,
+    firstSource,
+    thumbnailUrl: i.thumbnailUrl ?? null,
+  };
+}
+
 /**
  * GET /api/issues/top-today
  * 오늘의 TOP 이슈 (서버 랭킹)
@@ -101,10 +148,10 @@ issuesRouter.get("/top-today", async (_req, res) => {
         id: true,
         title: true,
         summary: true,
+        tags: true,
         createdAt: true,
         updatedAt: true,
-        thumbnailUrl: true ?? null, // 🔹 썸네일 필드
-        thumbnail: i.thumbnailUrl ?? null,
+        thumbnailUrl: true, // 🔹 썸네일 필드
         sources: {
           select: {
             outlet: true,
@@ -115,45 +162,37 @@ issuesRouter.get("/top-today", async (_req, res) => {
       },
     });
 
-    const ranked = raw
-      .map((i) => {
-        const total = i.sources.length;
-        const left = i.sources.filter((s) => s.side === "left").length;
-        const right = i.sources.filter((s) => s.side === "right").length;
-        const diversity = (left > 0 ? 1 : 0) + (right > 0 ? 1 : 0);
-        const score = total + diversity * 1.5;
+    const scored = raw.map((i) => {
+      const srcs = i.sources as SimpleSource[];
 
-        const leftSources = uniqueTop(
-          i.sources as SimpleSource[],
-          "left",
-          4
-        );
-        const rightSources = uniqueTop(
-          i.sources as SimpleSource[],
-          "right",
-          4
-        );
-        const firstSource = firstSourceName(i.sources);
-        const latest = i.sources
-          .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
-          .reduce((a: number, b: number) => Math.max(a, b), 0);
-
-        return {
+      // 공통 리스트 형태로 변환
+      const base = toIssueListItem(
+        {
           id: i.id,
           title: i.title,
-          summary: i.summary ?? "",
-          updatedAt: latest
-            ? new Date(latest).toISOString()
-            : i.updatedAt.toISOString(),
-          leftSources,
-          rightSources,
-          firstSource,
-          thumbnailUrl: i.thumbnailUrl ?? null, // 🔹 카드용 썸네일
-          score,
-        };
-      })
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5);
+          summary: i.summary,
+          tags: i.tags,
+          createdAt: i.createdAt,
+          updatedAt: i.updatedAt,
+          thumbnailUrl: i.thumbnailUrl,
+        },
+        srcs
+      );
+
+      // 기존 점수 계산 로직 유지
+      const total = srcs.length;
+      const left = srcs.filter((s) => s.side === "left").length;
+      const right = srcs.filter((s) => s.side === "right").length;
+      const diversity = (left > 0 ? 1 : 0) + (right > 0 ? 1 : 0);
+      const score = total + diversity * 1.5;
+
+      return {
+        ...base,
+        score,
+      };
+    });
+
+    const ranked = scored.sort((a, b) => b.score - a.score).slice(0, 5);
 
     res.json(ranked);
   } catch (err) {
@@ -196,30 +235,20 @@ issuesRouter.get("/", async (req, res) => {
     },
   });
 
-  const items = raw.map((i) => {
-    const srcs = i.sources as SimpleSource[];
-
-    const leftSources = uniqueTop(srcs, "left", 4);
-    const rightSources = uniqueTop(srcs, "right", 4);
-    const firstSource = firstSourceName(srcs);
-    const latest = srcs
-      .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
-      .reduce((a: number, b: number) => Math.max(a, b), 0);
-
-    return {
-      id: i.id,
-      title: i.title,
-      summary: i.summary ?? "",
-      tags: Array.isArray(i.tags) ? (i.tags as string[]) : [],
-      updatedAt: latest
-        ? new Date(latest).toISOString()
-        : i.updatedAt.toISOString(),
-      leftSources,
-      rightSources,
-      firstSource,
-      thumbnailUrl: i.thumbnailUrl ?? null, // 🔹 카드에서 바로 사용
-    };
-  });
+  const items: IssueListItem[] = raw.map((i) =>
+    toIssueListItem(
+      {
+        id: i.id,
+        title: i.title,
+        summary: i.summary,
+        tags: i.tags,
+        createdAt: i.createdAt,
+        updatedAt: i.updatedAt,
+        thumbnailUrl: i.thumbnailUrl,
+      },
+      i.sources as SimpleSource[]
+    )
+  );
 
   const hasNext = items.length > take;
   const sliced = hasNext ? items.slice(0, take) : items;
