@@ -13,7 +13,11 @@ import {
   Prisma,
   SourceSide as PrismaSide,
 } from "@prisma/client";
-import { parseArticles } from "./parseArticle.js"; // ✅ 추가
+
+// 🔹 추가: HTML 파싱 + 썸네일 추출
+import { parseArticles } from "./parseArticle.js";
+// 🔹 추가: Issue.thumbnailUrl 채우는 백필
+import { backfillIssueThumbnails } from "./backfillIssueThumbnails.js";
 
 /** ───────────────────────────────────────────────────────────────
  *  side 매핑 (문자열/뉴스타입 ↔ Prisma enum)
@@ -75,15 +79,16 @@ function dbRowToRawArticleLite(row: {
     hash: row.hash ?? "",
   };
   const s = (row.text || "").trim();
-  if (s) base.summary = s;
+  if (s) base.summary = s; // 🔹 HTML 파싱된 본문(text)을 summary로 사용
   return base;
 }
 
 /** 메인 파이프라인
  *  - scraped를 DB에 upsert(중복 차단)
- *  - 최근 DB 기사(lookback) 포함하여 병합
- *  - ENV로 임베딩/토큰 클러스터링 선택
- *  - 기존 이슈 보존 규칙은 attachIssues에서 수행
+ *  - HTML 파싱 + 썸네일 추출 (parseArticles)
+ *  - 최근 PARSED 기사 포함하여 클러스터링
+ *  - 이슈 생성/갱신 + 소스 연결
+ *  - 이슈 썸네일 백필(backfillIssueThumbnails)
  */
 export async function runPipeline(scraped: RawArticleLite[]) {
   // 0) 룩백 윈도우
@@ -117,26 +122,22 @@ export async function runPipeline(scraped: RawArticleLite[]) {
     }
   }
 
-  // 1.5) ✅ FETCHED 기사들 본문 파싱 (html/text 채우고 PARSED로 전환)
-  // 너무 많이 돌지 않도록 limit은 ENV로 컨트롤
-  const parseLimit = Number(process.env.NEWS_PARSE_LIMIT ?? 200);
+  // 1.5) 🔥 HTML 파싱 + 썸네일 추출 실행
+  //  - status = FETCHED 인 RawArticle 대상으로
+  //  - html, text, thumbnail 채우고 status=PARSED 로 바꿈
   try {
-    console.log(
-      `[NEWS] parseArticles start (limit=${parseLimit}, env.NEWS_PARSE_LIMIT=${process.env.NEWS_PARSE_LIMIT})`
-    );
+    const parseLimit = Number(process.env.NEWS_PARSE_LIMIT ?? 200);
     await parseArticles(parseLimit);
-    console.log("[NEWS] parseArticles done");
   } catch (e) {
-    console.error("[NEWS] parseArticles error", e);
-    // 클러스터링은 일단 텍스트 있는 애들 위주로라도 계속 돌게 두고,
-    // 여기서 프로세스를 죽이진 않음
+    console.warn("[runPipeline] parseArticles failed:", e);
+    // 파싱 실패해도 클러스터링 자체는 계속 진행
   }
 
-  // 2) 최근 DB 기사 로드 (FETCHED + PARSED)
+  // 2) 최근 DB 기사 로드 (🔹 PARSED 된 것만 사용해도 충분)
   const recentFromDB = await prisma.rawArticle.findMany({
     where: {
       createdAt: { gte: since },
-      status: { in: [ArticleStatus.FETCHED, ArticleStatus.PARSED] },
+      status: ArticleStatus.PARSED,
       url: { not: "" },
     },
     select: {
@@ -165,9 +166,7 @@ export async function runPipeline(scraped: RawArticleLite[]) {
     if ((a as any).summary) base.summary = String((a as any).summary);
     return base;
   });
-  const normalizedDB: RawArticleLite[] = recentFromDB.map(
-    dbRowToRawArticleLite
-  );
+  const normalizedDB: RawArticleLite[] = recentFromDB.map(dbRowToRawArticleLite);
 
   const merged = [...normalizedScraped, ...normalizedDB];
   const dedupMap = new Map<string, RawArticleLite>();
@@ -187,6 +186,14 @@ export async function runPipeline(scraped: RawArticleLite[]) {
 
   // 5) 이슈 생성/갱신 + 소스 연결(기존 이슈 보존 규칙 포함)
   const issues = await attachIssues(clustered);
+
+  // 6) 🔥 이슈 썸네일 백필
+  try {
+    const backfillLimit = Number(process.env.NEWS_BACKFILL_ISSUES_LIMIT ?? 50);
+    await backfillIssueThumbnails(backfillLimit);
+  } catch (e) {
+    console.warn("[runPipeline] backfillIssueThumbnails failed:", e);
+  }
 
   return { clusters: clustered, issues };
 }
