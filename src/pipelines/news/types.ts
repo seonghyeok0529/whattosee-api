@@ -11,6 +11,7 @@ export type RawArticleLite = {
   // 선택적으로 들어올 수 있는 임시 키들(있어도 되고 없어도 됨)
   body?: string;
   hash?: string;
+  thumbnail?: string | null;
   clusterKey?: string;
 };
 
