@@ -103,7 +103,8 @@ issuesRouter.get("/top-today", async (_req, res) => {
         summary: true,
         createdAt: true,
         updatedAt: true,
-        thumbnailUrl: true, // 🔹 썸네일 필드
+        thumbnailUrl: true ?? null, // 🔹 썸네일 필드
+        thumbnail: i.thumbnailUrl ?? null,
         sources: {
           select: {
             outlet: true,
