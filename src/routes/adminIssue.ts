@@ -107,7 +107,8 @@ adminIssueRoutes.get(
   requireAuth,
   adminAuth,
   async (req: Request, res: Response) => {
-    const status = (req.query.status as string | undefined) || undefined; // "PUBLISHED" 등
+    // 🔹 statusRaw 로 받아서 toIssueStatus 로 매핑
+    const statusRaw = (req.query.status as string | undefined)?.trim();
     const q = (req.query.q as string | undefined)?.trim() ?? "";
     const sort = (req.query.sort as string | undefined) || "latest";
     const takeRaw = parseInt((req.query.take as string) ?? "20", 10);
@@ -116,8 +117,9 @@ adminIssueRoutes.get(
 
     const where: Prisma.IssueWhereInput = {};
 
-    if (status && status !== "ALL") {
-      where.status = status as IssueStatus; // 이미 enum 문자열로 온다고 가정
+    if (statusRaw && statusRaw.toUpperCase() !== "ALL") {
+      // "draft" / "published" / "PUBLISH" / "ARCHIVE" 전부 허용
+      where.status = toIssueStatus(statusRaw);
     }
 
     if (q) {
@@ -154,17 +156,16 @@ adminIssueRoutes.get(
       (query as any).skip = 1;
     }
 
-    // _count 타입 때문에 any 캐스팅
     const items = (await prisma.issue.findMany(query as any)) as any[];
 
     let nextCursor: string | null = null;
     if (items.length > take) {
-    const last = items.pop()!;
-    nextCursor = last.id;
+      const last = items.pop()!;
+      nextCursor = last.id;
     }
 
     return res.json({
-    items: items.map((i) => ({
+      items: items.map((i) => ({
         id: i.id,
         title: i.title,
         summary: i.summary,
@@ -173,12 +174,12 @@ adminIssueRoutes.get(
         updatedAt: i.updatedAt,
         sourcesCount: i._count?.sources ?? 0,
         commentsCount: i._count?.comments ?? 0,
-    })),
-    nextCursor,
+      })),
+      nextCursor,
     });
-
   }
 );
+
 
 
 
