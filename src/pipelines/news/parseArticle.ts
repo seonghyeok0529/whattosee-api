@@ -25,16 +25,24 @@ export async function parseArticles(limit = 100) {
       const reader = new Readability(dom.window.document).parse();
       const text = (reader?.textContent || "").trim();
 
+      // ✅ 본문 길이와 상관없이 썸네일은 먼저 뽑아둔다
+      const thumbnail = extractThumbnailFromHtml(html, a.url);
+
+      // 🔻 짧은 기사 처리 로직 수정
       if (!text || text.length < 300) {
         await prisma.rawArticle.update({
           where: { id: a.id },
-          data: { status: "FAILED" },
+          data: {
+            // 👉 필요하면 html도 저장해 두는 게 나중에 다시 파싱할 때 유리
+            html,
+            thumbnail: thumbnail ?? undefined,
+            status: "FAILED",   // 또는 "SHORT" 같은 새 상태를 만들어도 됨
+          },
         });
         continue;
       }
 
-      const thumbnail = extractThumbnailFromHtml(html, a.url);
-
+      // 🔹 정상 길이 기사 → PARSED + 썸네일 저장
       await prisma.rawArticle.update({
         where: { id: a.id },
         data: {
