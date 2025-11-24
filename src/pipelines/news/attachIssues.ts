@@ -10,21 +10,33 @@ function normTitle(t?: string) {
 }
 function toSideEnum(side?: string): SourceSide {
   switch ((side ?? "").toLowerCase()) {
-    case "left": return SourceSide.left;
-    case "right": return SourceSide.right;
-    case "neutral": return SourceSide.neutral;
+    case "left":
+      return SourceSide.left;
+    case "right":
+      return SourceSide.right;
+    case "neutral":
+      return SourceSide.neutral;
     case "center":
-    default: return SourceSide.center;
+    default:
+      return SourceSide.center;
   }
 }
 
 /** 대표 기사(정보량 추정) */
 function pickRepresentative(articles: RawArticleLite[]) {
-  return articles.slice().sort((a, b) => {
-    const la = (a.title?.length ?? 0) + (a.summary?.length ?? 0) + (a.body?.length ?? 0);
-    const lb = (b.title?.length ?? 0) + (b.summary?.length ?? 0) + (b.body?.length ?? 0);
-    return lb - la;
-  })[0];
+  return articles
+    .slice()
+    .sort((a, b) => {
+      const la =
+        (a.title?.length ?? 0) +
+        (a.summary?.length ?? 0) +
+        (a.body?.length ?? 0);
+      const lb =
+        (b.title?.length ?? 0) +
+        (b.summary?.length ?? 0) +
+        (b.body?.length ?? 0);
+      return lb - la;
+    })[0];
 }
 
 /** 새 이슈 생성 시 사용할 dedupKey(백업키 성격) */
@@ -40,7 +52,7 @@ function makeIssueDedupKey(articles: RawArticleLite[]) {
   const bag = Array.from(tokens).sort().slice(0, 64).join("|");
   const firstTime =
     articles
-      .map(a => new Date(a.publishedAt ?? 0).getTime())
+      .map((a) => new Date(a.publishedAt ?? 0).getTime())
       .filter(Number.isFinite)
       .sort((x, y) => x - y)[0] ?? 0;
   const base = `${bag}|${firstTime}`;
@@ -48,7 +60,9 @@ function makeIssueDedupKey(articles: RawArticleLite[]) {
 }
 
 /** 클러스터의 URL들이 이미 어떤 이슈에 묶여있는지 확인하여 "정본 이슈" 결정 */
-async function resolveCanonicalIssueId(urls: string[]): Promise<string | null> {
+async function resolveCanonicalIssueId(
+  urls: string[]
+): Promise<string | null> {
   if (urls.length === 0) return null;
   const srcs = await prisma.source.findMany({
     where: { url: { in: urls } },
@@ -58,11 +72,15 @@ async function resolveCanonicalIssueId(urls: string[]): Promise<string | null> {
 
   // 가장 많이 등장하는 issueId(최빈값)를 정본으로 선택
   const counts = new Map<string, number>();
-  for (const s of srcs) counts.set(s.issueId, (counts.get(s.issueId) ?? 0) + 1);
+  for (const s of srcs)
+    counts.set(s.issueId, (counts.get(s.issueId) ?? 0) + 1);
   let best: string | null = null;
   let bestCnt = -1;
   for (const [id, c] of counts.entries()) {
-    if (c > bestCnt) { best = id; bestCnt = c; }
+    if (c > bestCnt) {
+      best = id;
+      bestCnt = c;
+    }
   }
   return best;
 }
@@ -74,18 +92,27 @@ export async function attachIssues(clusters: Cluster[]) {
     const arts = Array.isArray(cluster.articles) ? cluster.articles : [];
     if (arts.length === 0) continue;
 
-    const rep   = pickRepresentative(arts);
+    const rep = pickRepresentative(arts);
     const title = normTitle((cluster as any).title ?? rep?.title);
-    const body  = (((cluster as any).summary ?? rep?.summary ?? rep?.body ?? "") as string).trim();
-    const tags  = (Array.isArray((cluster as any).tags) ? (cluster as any).tags : []) as string[];
+    const body = (((cluster as any).summary ??
+      rep?.summary ??
+      rep?.body ??
+      "") as string).trim();
+    const tags = (Array.isArray((cluster as any).tags)
+      ? (cluster as any).tags
+      : []) as string[];
 
     // 🔹 대표 썸네일 하나 고르기 (대표 기사 우선, 없으면 아무 기사나)
     const thumbnailFromRep = rep?.thumbnail?.trim() || null;
-    const thumbnailFallback = arts.find(a => a.thumbnail && a.thumbnail.trim())?.thumbnail?.trim() || null;
+    const thumbnailFallback =
+      arts.find((a) => a.thumbnail && a.thumbnail.trim())?.thumbnail?.trim() ||
+      null;
     const thumbnailUrl = thumbnailFromRep || thumbnailFallback || null;
 
     // ① URL 들 중 기존 이슈가 있으면 그것을 정본으로 사용
-    const urls = arts.map(a => (a.url ?? "").trim()).filter(Boolean);
+    const urls = arts
+      .map((a) => (a.url ?? "").trim())
+      .filter(Boolean);
     const canonicalId = await resolveCanonicalIssueId(urls);
 
     let issueId: string;
@@ -98,7 +125,7 @@ export async function attachIssues(clusters: Cluster[]) {
           ...(title ? { title } : {}),
           ...(body ? { body } : {}),
           ...(tags.length ? { tags } : {}),
-          // 🔹 기존 썸네일 없으면 새로 채워줌
+          // 🔹 새로 잡은 썸네일이 있으면 채워줌
           ...(thumbnailUrl ? { thumbnailUrl } : {}),
         },
       });
@@ -128,7 +155,7 @@ export async function attachIssues(clusters: Cluster[]) {
             title,
             body,
             ...(tags.length ? { tags } : {}),
-            ...(thumbnailUrl ? { thumbnailUrl } : {}),
+            ...(thumbnailUrl ? { thumbnailUrl } : {}), // 🔹 새 이슈는 바로 썸네일 세팅
           },
           select: { id: true },
         });
@@ -149,8 +176,10 @@ export async function attachIssues(clusters: Cluster[]) {
       const data = {
         issueId,
         outlet: a.outlet ?? "언론",
-        title : normTitle(a.title),
-        side  : toSideEnum(a.side as any),
+        title: normTitle(a.title),
+        side: toSideEnum(a.side as any),
+        // publishedAt 을 붙이고 싶으면 여기에 추가 가능
+        // publishedAt: new Date(a.publishedAt ?? new Date()),
       };
 
       if (existed) {
