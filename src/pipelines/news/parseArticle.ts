@@ -3,10 +3,9 @@ import { JSDOM } from "jsdom";
 import { Readability } from "@mozilla/readability";
 import prisma from "../../lib/prisma.js";
 import { extractThumbnailFromHtml } from "./extractThumbnail.js";
+import axios from "axios";  // 🔹 여기에 정적 import
 
 export async function parseArticles(limit = 100) {
-  const { default: got } = await import("got");
-  
   const targets = await prisma.rawArticle.findMany({
     where: { status: "FETCHED" },
     take: limit,
@@ -15,7 +14,13 @@ export async function parseArticles(limit = 100) {
 
   for (const a of targets) {
     try {
-      const html = await got(a.url, { timeout: { request: 10000 } }).text();
+      const resp = await axios.get<string>(a.url, {
+        timeout: 10000,
+        responseType: "text",
+        validateStatus: () => true,
+      });
+
+      const html = resp.data || "";
       const dom = new JSDOM(html, { url: a.url });
       const reader = new Readability(dom.window.document).parse();
       const text = (reader?.textContent || "").trim();
