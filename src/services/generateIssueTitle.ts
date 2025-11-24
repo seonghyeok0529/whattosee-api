@@ -23,9 +23,8 @@ export async function generateIssueTitle(issue: Issue & { sources: Source[] }) {
 - 정보 중복 금지
 - 과장·자극적 표현 금지
 - 언론이 실제로 쓸 법한 어법 사용
-- 밋밋한 제목 금지
+- 신뢰성 있는 표현
 - ‘핵심 사건/논점’이 제목에 반드시 포함될 것
-- 필요 시 “○○논란 / ○○사건 / ○○공방” 가능(단 과장 금지)
 
 기사 제목들:
 ${titles}
