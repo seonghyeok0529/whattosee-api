@@ -79,7 +79,12 @@ export async function attachIssues(clusters: Cluster[]) {
     const body  = (((cluster as any).summary ?? rep?.summary ?? rep?.body ?? "") as string).trim();
     const tags  = (Array.isArray((cluster as any).tags) ? (cluster as any).tags : []) as string[];
 
-    // ① URL 들 중 기존 이슈가 있으면 그것을 정본으로 사용 (소스 이동 방지)
+    // 🔹 대표 썸네일 하나 고르기 (대표 기사 우선, 없으면 아무 기사나)
+    const thumbnailFromRep = rep?.thumbnail?.trim() || null;
+    const thumbnailFallback = arts.find(a => a.thumbnail && a.thumbnail.trim())?.thumbnail?.trim() || null;
+    const thumbnailUrl = thumbnailFromRep || thumbnailFallback || null;
+
+    // ① URL 들 중 기존 이슈가 있으면 그것을 정본으로 사용
     const urls = arts.map(a => (a.url ?? "").trim()).filter(Boolean);
     const canonicalId = await resolveCanonicalIssueId(urls);
 
@@ -93,6 +98,8 @@ export async function attachIssues(clusters: Cluster[]) {
           ...(title ? { title } : {}),
           ...(body ? { body } : {}),
           ...(tags.length ? { tags } : {}),
+          // 🔹 기존 썸네일 없으면 새로 채워줌
+          ...(thumbnailUrl ? { thumbnailUrl } : {}),
         },
       });
       issueId = canonicalId;
@@ -111,19 +118,25 @@ export async function attachIssues(clusters: Cluster[]) {
             ...(title ? { title } : {}),
             ...(body ? { body } : {}),
             ...(tags.length ? { tags } : {}),
+            ...(thumbnailUrl ? { thumbnailUrl } : {}),
           },
         });
       } else {
         const created = await prisma.issue.create({
-          data: { dedupKey, title, body, ...(tags.length ? { tags } : {}) },
+          data: {
+            dedupKey,
+            title,
+            body,
+            ...(tags.length ? { tags } : {}),
+            ...(thumbnailUrl ? { thumbnailUrl } : {}),
+          },
           select: { id: true },
         });
         issueId = created.id;
       }
     }
 
-    // ③ Source 동기화: 이미 다른 이슈에 붙어있는 소스는 **옮기지 않는다**
-    //    (정본 이슈를 따르되, 새로 들어온 URL만 upsert)
+    // ③ Source 동기화
     for (const a of arts) {
       const url = a?.url?.trim();
       if (!url) continue;
@@ -138,16 +151,12 @@ export async function attachIssues(clusters: Cluster[]) {
         outlet: a.outlet ?? "언론",
         title : normTitle(a.title),
         side  : toSideEnum(a.side as any),
-        // publishedAt 필드가 있다면 여기에 세팅 가능
-        // publishedAt: new Date(a.publishedAt ?? new Date()),
       };
 
       if (existed) {
-        // 이미 다른 이슈에 연결돼있다면 건드리지 않음 (보존)
         if (existed.issueId === issueId) {
           await prisma.source.update({ where: { id: existed.id }, data });
         }
-        // else: skip (보존 원칙)
       } else {
         await prisma.source.create({ data: { url, ...data } });
       }
