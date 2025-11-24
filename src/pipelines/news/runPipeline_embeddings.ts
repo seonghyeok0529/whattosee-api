@@ -14,9 +14,9 @@ import {
   SourceSide as PrismaSide,
 } from "@prisma/client";
 
-// 🔹 추가: HTML 파싱 + 썸네일 추출
+// 🔹 HTML 파싱 + 썸네일 추출
 import { parseArticles } from "./parseArticle.js";
-// 🔹 추가: Issue.thumbnailUrl 채우는 백필
+// 🔹 Issue.thumbnailUrl 채우는 백필
 import { backfillIssueThumbnails } from "./backfillIssueThumbnails.js";
 
 /** ───────────────────────────────────────────────────────────────
@@ -52,7 +52,7 @@ function toNewsSide(s?: string | null): NewsSide {
 /** 날짜/해시 유틸 */
 function asDate(x: RawArticleLite["publishedAt"]): Date {
   if (!x) return new Date();
-  const d = x instanceof Date ? x : new Date(x);
+  const d = x instanceof Date ? x : new Date(x as any);
   return isNaN(d.getTime()) ? new Date() : d;
 }
 function hashKey(a: RawArticleLite): string {
@@ -69,6 +69,7 @@ function dbRowToRawArticleLite(row: {
   publishedAt: Date | null;
   hash: string | null;
   text?: string | null;
+  thumbnail?: string | null; // 🔹 DB에서 썸네일도 같이 가져옴
 }): RawArticleLite {
   const base: RawArticleLite = {
     outlet: row.outlet,
@@ -78,8 +79,14 @@ function dbRowToRawArticleLite(row: {
     publishedAt: row.publishedAt ?? new Date(),
     hash: row.hash ?? "",
   };
+
   const s = (row.text || "").trim();
   if (s) base.summary = s; // 🔹 HTML 파싱된 본문(text)을 summary로 사용
+
+  if (row.thumbnail) {
+    base.thumbnail = row.thumbnail; // 🔹 RawArticle.thumbnail -> RawArticleLite.thumbnail
+  }
+
   return base;
 }
 
@@ -148,6 +155,7 @@ export async function runPipeline(scraped: RawArticleLite[]) {
       publishedAt: true,
       hash: true,
       text: true,
+      thumbnail: true, // 🔹 DB에서 썸네일도 함께 가져옴
     },
     orderBy: { createdAt: "asc" },
     take: Math.min(Number(process.env.NEWS_MAX_RECENT_DB ?? 500), 1000),
@@ -164,8 +172,10 @@ export async function runPipeline(scraped: RawArticleLite[]) {
       hash: (a as any).hash ?? hashKey(a),
     };
     if ((a as any).summary) base.summary = String((a as any).summary);
+    if ((a as any).thumbnail) base.thumbnail = String((a as any).thumbnail); // 🔹 scraped 썸네일도 유지
     return base;
   });
+
   const normalizedDB: RawArticleLite[] = recentFromDB.map(dbRowToRawArticleLite);
 
   const merged = [...normalizedScraped, ...normalizedDB];
