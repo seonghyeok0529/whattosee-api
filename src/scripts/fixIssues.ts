@@ -8,7 +8,6 @@ async function main() {
     },
     data: {
       status: IssueStatus.PUBLISHED,
-      parsed: true,
     },
   });
 
