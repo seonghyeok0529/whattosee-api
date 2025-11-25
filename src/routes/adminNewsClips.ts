@@ -350,7 +350,8 @@ router.post(
         clipIds,
         leftSummary,
         rightSummary,
-        fromClusterId,        // 🔹 추가
+        fromClusterId,  
+        glossaryText,
       } = req.body as {
         title?: string;
         description?: string | null;
@@ -359,7 +360,8 @@ router.post(
         clipIds?: string[];
         leftSummary?: string | null;
         rightSummary?: string | null;
-        fromClusterId?: string | null;  // 🔹 추가
+        fromClusterId?: string | null;
+        glossaryText?: string | null;
       };
 
       if (!title || !clipIds || clipIds.length === 0) {
@@ -393,6 +395,7 @@ router.post(
           totalViews: 0,
           progressiveSummary: leftSummary ?? null,
           conservativeSummary: rightSummary ?? null,
+          glossaryText: glossaryText ?? null,
           clips: {
             create: rawClipsInIssue.map((c) => ({
               rawClip: { connect: { id: c.id } },
@@ -458,6 +461,7 @@ router.patch(
         clipIds,
         leftSummary,
         rightSummary,
+        glossaryText,
       } = req.body as {
         title?: string;
         description?: string | null;
@@ -466,6 +470,7 @@ router.patch(
         clipIds?: string[];
         leftSummary?: string | null;
         rightSummary?: string | null;
+        glossaryText?: string | null;
       };
 
       const clipIdsSafe = clipIds ?? [];
@@ -487,6 +492,7 @@ router.patch(
           clipCount: clipIdsSafe.length,
           progressiveSummary: leftSummary ?? null,
           conservativeSummary: rightSummary ?? null,
+          glossaryText: glossaryText ?? null,
           clips: {
             deleteMany: {}, // 이전 연결 전부 제거
             create: rawClipsInIssue.map((c) => ({
