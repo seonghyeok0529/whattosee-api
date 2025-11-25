@@ -1051,101 +1051,150 @@ adminIssueRoutes.get(
     }
   );
 
-  /* ─────────────────────────────────────────────
+/* ─────────────────────────────────────────────
    10. 이슈 AI 제목/요약 재생성
    POST /api/admin/issues/:id/refresh-summary
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
-    "/issues/:id/refresh-summary",
-    requireAuth,
-    adminAuth,
-    async (req: Request, res: Response) => {
-      try {
-        const { id } = req.params;
-  
-        const issue = await prisma.issue.findUnique({
-          where: { id },
-          include: { sources: true },
-        });
-  
-        if (!issue) {
-          return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-        }
-  
-        let aiTitle: string | null = null;
-        let aiSummary: string | null = null;
-  
+  "/issues/:id/refresh-summary",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const issue = await prisma.issue.findUnique({
+        where: { id },
+        include: { sources: true },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      // ✅ 이미 사람이 손댄 값이면 재생성하지 않도록 체크
+      const hasTitle =
+        (issue.title ?? "").trim().length > 0 &&
+        (issue.title ?? "").trim() !== "(제목 없음)";
+      const hasSummary = (issue.summary ?? "").trim().length > 0;
+
+      let newTitle: string | undefined;
+      let newSummary: string | undefined;
+
+      // 🔹 제목이 비어 있을 때만 생성
+      if (!hasTitle) {
         try {
-          aiTitle = await generateIssueTitle(issue as any);
+          const aiTitle = await generateIssueTitle(issue as any);
+          if (aiTitle?.trim()?.length) {
+            newTitle = aiTitle.trim();
+          }
         } catch (e) {
           console.error("[refresh-summary] 제목 생성 실패:", e);
         }
-  
+      }
+
+      // 🔹 요약이 비어 있을 때만 생성
+      if (!hasSummary) {
         try {
-          aiSummary = await generateIssueSummary(issue as any);
+          const aiSummary = await generateIssueSummary(issue as any);
+          if (aiSummary?.trim()?.length) {
+            newSummary = aiSummary.trim();
+          }
         } catch (e) {
           console.error("[refresh-summary] 요약 생성 실패:", e);
         }
-  
-        const updated = await prisma.issue.update({
-          where: { id },
-          data: {
-            ...(aiTitle?.trim()?.length ? { title: aiTitle.trim() } : {}),
-            ...(aiSummary?.trim()?.length ? { summary: aiSummary.trim() } : {}),
-          },
-        });
-  
-        return res.json({ ok: true, item: updated });
-      } catch (err) {
-        console.error("refresh-summary error:", err);
-        return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
       }
-    }
-  );
 
-  /* ─────────────────────────────────────────────
+      if (!newTitle && !newSummary) {
+        // 생성할 게 없으면 그대로 반환
+        return res.json({ ok: true, item: issue });
+      }
+
+      const updated = await prisma.issue.update({
+        where: { id },
+        data: {
+          ...(newTitle ? { title: newTitle } : {}),
+          ...(newSummary ? { summary: newSummary } : {}),
+        },
+      });
+
+      return res.json({ ok: true, item: updated });
+    } catch (err) {
+      console.error("refresh-summary error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+
+/* ─────────────────────────────────────────────
    11. 좌/우 언론 요약 자동 생성
    POST /api/admin/issues/:id/refresh-side-summary
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
-    "/issues/:id/refresh-side-summary",
-    requireAuth,
-    adminAuth,
-    async (req: Request, res: Response) => {
-      try {
-        const { id } = req.params;
-  
-        const issue = await prisma.issue.findUnique({
-          where: { id },
-          include: { sources: true },
-        });
-  
-        if (!issue) {
-          return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-        }
-  
-        let leftSummary: string | null = null;
-        let rightSummary: string | null = null;
-  
-        try {
-          leftSummary = await generateSideSummary(issue.id, "left");
-          rightSummary = await generateSideSummary(issue.id, "right");
-        } catch (e) {
-          console.error("[refresh-side-summary] 생성 실패:", e);
-        }
-  
-        const updated = await prisma.issue.update({
-          where: { id },
-          data: {
-            ...(leftSummary?.trim()?.length ? { leftSummary: leftSummary.trim() } : {}),
-            ...(rightSummary?.trim()?.length ? { rightSummary: rightSummary.trim() } : {}),
-          },
-        });
-  
-        return res.json({ ok: true, item: updated });
-      } catch (err) {
-        console.error("refresh-side-summary error:", err);
-        return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+  "/issues/:id/refresh-side-summary",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const issue = await prisma.issue.findUnique({
+        where: { id },
+        include: { sources: true },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
+
+      const hasLeft = (issue.leftSummary ?? "").trim().length > 0;
+      const hasRight = (issue.rightSummary ?? "").trim().length > 0;
+
+      let newLeft: string | undefined;
+      let newRight: string | undefined;
+
+      // 🔹 진보 요약이 비어 있을 때만 생성
+      if (!hasLeft) {
+        try {
+          const leftSummary = await generateSideSummary(issue.id, "left");
+          if (leftSummary?.trim()?.length) {
+            newLeft = leftSummary.trim();
+          }
+        } catch (e) {
+          console.error("[refresh-side-summary] left 생성 실패:", e);
+        }
+      }
+
+      // 🔹 보수 요약이 비어 있을 때만 생성
+      if (!hasRight) {
+        try {
+          const rightSummary = await generateSideSummary(issue.id, "right");
+          if (rightSummary?.trim()?.length) {
+            newRight = rightSummary.trim();
+          }
+        } catch (e) {
+          console.error("[refresh-side-summary] right 생성 실패:", e);
+        }
+      }
+
+      if (!newLeft && !newRight) {
+        // 생성할 게 없으면 기존 이슈 그대로 반환
+        return res.json({ ok: true, item: issue });
+      }
+
+      const updated = await prisma.issue.update({
+        where: { id },
+        data: {
+          ...(newLeft ? { leftSummary: newLeft } : {}),
+          ...(newRight ? { rightSummary: newRight } : {}),
+        },
+      });
+
+      return res.json({ ok: true, item: updated });
+    } catch (err) {
+      console.error("refresh-side-summary error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
-  );
+  }
+);
