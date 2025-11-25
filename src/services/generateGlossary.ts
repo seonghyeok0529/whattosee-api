@@ -1,7 +1,7 @@
 // src/services/generateGlossary.ts
 import { openai, DEFAULT_MODEL } from "../lib/openai.js";
 
-export type GlossaryLocale = "ko" | "en";
+export type GlossaryLocale = "ko" | "en"; 
 export type GlossarySourceType = "article" | "clip";
 
 export interface GenerateGlossaryParams {
