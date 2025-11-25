@@ -5,8 +5,13 @@ import { IssueStatus, type SourceSide } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { getOrCreateIssueSummary } from "../services/issueSummary.js";
 import { generateSideSummary } from "@/services/generateSideSummary.js";
+import { OpenAI } from "openai"; 
 
 export const issuesRouter = Router();
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 /** 주요 언론 화이트리스트(원하는 대로 추가/수정) */
 const MAJOR_OUTLETS = new Set<string>([
@@ -390,10 +395,121 @@ issuesRouter.get("/:id/fact-check", async (_req, res) => {
   res.json({ items: [] });
 });
 
-// Glossary (placeholder)
-issuesRouter.get("/:id/glossary", async (_req, res) => {
-  res.json({ items: [] });
+// Glossary (OpenAI 기반 용어 사전)
+issuesRouter.get("/:id/glossary", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const issue = await prisma.issue.findUnique({
+      where: { id },
+      select: {
+        title: true,
+        summary: true,
+        body: true,
+        tags: true,
+      },
+    });
+
+    if (!issue) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+
+    const tags = Array.isArray(issue.tags)
+      ? (issue.tags as any[]).filter((t) => typeof t === "string")
+      : [];
+
+    const contextParts: string[] = [];
+    if (issue.title) contextParts.push(issue.title);
+    if (issue.summary) contextParts.push(issue.summary);
+    if (issue.body) contextParts.push(String(issue.body).slice(0, 800));
+
+    const contextText = contextParts.join("\n\n");
+
+    const prompt = `
+너는 한국어로 정치·사회 이슈를 설명하는 "용어 사전" 편집자이다.
+
+아래는 어떤 뉴스 이슈에 대한 정보이다.
+
+[이슈 제목]
+${issue.title}
+
+[이슈 요약/본문 일부]
+${contextText || "(요약/본문 없음)"}
+
+[관련 키워드(tags)]
+${tags.join(", ") || "(태그 없음)"}
+
+이 정보를 바탕으로, 이 이슈를 이해하는 데 중요하지만
+일반 시민이 직관적으로 이해하기 어려울 법한 용어만 골라라.
+
+다음 규칙을 지켜서 JSON 배열을 만들어라.
+
+1. 최대 5개 용어만 선택한다. (적어도 1개 이상)
+2. 각 항목은 다음 필드를 가진다:
+   - term: 용어 (짧게, 예: "재정건전성")
+   - definition: 쉬운 한국어 정의 (두세 문장)
+   - example: 실제 정책/상황 예시 (문장 1개 정도)
+   - relatedTerms: 같은 맥락의 다른 용어 배열 (예: ["국가채무", "재정수지"])
+
+3. 모든 필드는 한국어로 작성한다.
+4. JSON 이외의 텍스트는 절대 쓰지 마라. (설명, 말풍선, 주석 등 금지)
+`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4.1-mini", // 👉 너가 실제 쓰는 모델명으로 바꿔도 됨
+      messages: [
+        {
+          role: "system",
+          content:
+            "너는 한국어 정치·사회 이슈를 쉽게 설명하는 용어 사전 편집자이다. 반드시 JSON 배열만 출력한다.",
+        },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.3,
+    });
+
+    const rawContent = completion.choices[0]?.message?.content ?? "[]";
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(rawContent);
+    } catch (e) {
+      console.error("[Glossary] JSON parse error:", e, "raw:", rawContent);
+      parsed = [];
+    }
+
+    const items =
+      Array.isArray(parsed)
+        ? parsed
+            .filter(
+              (x) => x && typeof x.term === "string" && typeof x.definition === "string"
+            )
+            .map((x) => ({
+              term: x.term,
+              definition: x.definition,
+              example: typeof x.example === "string" ? x.example : undefined,
+              relatedTerms: Array.isArray(x.relatedTerms)
+                ? x.relatedTerms.filter((t: any) => typeof t === "string")
+                : undefined,
+            }))
+        : [];
+
+    // 아무 것도 못 뽑았으면 태그 몇 개라도 돌려주기 (프론트 fallback)
+    const safeItems =
+      items.length > 0
+        ? items
+        : tags.slice(0, 3).map((t) => ({
+            term: t,
+            definition: `${t}에 대한 자세한 설명을 준비 중입니다.`,
+          }));
+
+    return res.json({ items: safeItems });
+  } catch (err) {
+    console.error("GET /issues/:id/glossary error", err);
+    return res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
 });
+
 
 // Related people (별도 personRef 테이블용)
 issuesRouter.get("/:id/people", async (req, res) => {
