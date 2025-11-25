@@ -293,3 +293,77 @@ newsClipsRouter.post(
     res.status(201).json(engagement);
   }
 );
+
+/* ─────────────────────────────────────────
+   GET /api/news-clips/:id/glossary
+   - ClipIssue.glossaryText 를 읽어서 GlossaryItem[] 형태로 내려줌
+───────────────────────────────────────── */
+newsClipsRouter.get("/:id/glossary", async (req, res) => {
+  const { id } = req.params;
+
+  const clipIssue = await prisma.clipIssue.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      title: true,
+      glossaryText: true, // Prisma 스키마에 이미 있는 필드
+    },
+  });
+
+  if (!clipIssue) {
+    return res.status(404).json({ error: "CLIP_ISSUE_NOT_FOUND" });
+  }
+
+  const raw = clipIssue.glossaryText;
+
+  // 기본 응답 형태: { items: GlossaryItem[] }
+  // GlossaryItem 타입은 프론트의 types/api.ts 에 정의된 것과 맞춰서 사용
+  let items: any[] = [];
+
+  if (raw && raw.trim().length > 0) {
+    // 1) glossaryText 가 JSON 배열이면 그대로 파싱해서 사용
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        items = parsed;
+      } else if (parsed && Array.isArray((parsed as any).items)) {
+        items = (parsed as any).items;
+      } else {
+        // 2) JSON 이지만 우리가 원하는 구조가 아닐 경우 → 하나의 항목으로 감싸기
+        items = [
+          {
+            term: clipIssue.title ?? "주요 용어",
+            definition: raw,
+            examples: [],
+          },
+        ];
+      }
+    } catch {
+      // 3) 그냥 텍스트일 경우 → 문단 단위로 쪼개서 임시 GlossaryItem 화
+      const chunks = raw
+        .split(/\n{2,}/)
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+
+      if (chunks.length === 0) {
+        items = [];
+      } else if (chunks.length === 1) {
+        items = [
+          {
+            term: clipIssue.title ?? "주요 용어",
+            definition: chunks[0],
+            examples: [],
+          },
+        ];
+      } else {
+        items = chunks.map((chunk, idx) => ({
+          term: `용어 ${idx + 1}`,
+          definition: chunk,
+          examples: [],
+        }));
+      }
+    }
+  }
+
+  return res.json({ items });
+});
