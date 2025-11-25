@@ -1198,3 +1198,64 @@ adminIssueRoutes.post(
     }
   }
 );
+
+/* ─────────────────────────────────────────────
+   12. 이슈 용어 사전 재생성
+   POST /api/admin/issues/:id/refresh-glossary
+───────────────────────────────────────────── */
+adminIssueRoutes.post(
+  "/issues/:id/refresh-glossary",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      // TODO: 나중에 generateIssueGlossary 같은 서비스로 교체
+      // 일단은 요약 텍스트 기반으로 간단한 stub 예시
+      const issue = await prisma.issue.findUnique({
+        where: { id },
+        include: { sources: true },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      // 간단 샘플: 각 기사 제목 몇 개 + 이슈 제목으로 glossary 흉내
+      const titles = issue.sources.map((s) => s.title).filter(Boolean).slice(0, 5);
+      const glossaryText =
+        [
+          `이 이슈는 "${issue.title}"에 대한 주요 쟁점을 다룹니다.`,
+          "",
+          "관련 기사 예시:",
+          ...titles.map((t, idx) => `${idx + 1}. ${t}`),
+        ].join("\n");
+
+      // DB에 glossaryText 필드가 있다면 업데이트
+      // (Issue 모델에 glossaryText TEXT 컬럼 있다고 가정)
+      await prisma.issue.update({
+        where: { id },
+        data: { glossaryText },
+      });
+
+      return res.json({
+        ok: true,
+        item: {
+          glossaryText,
+        },
+      });
+    } catch (err) {
+      console.error(
+        "❌ [POST /api/admin/issues/:id/refresh-glossary] error:",
+        err
+      );
+      return res.status(500).json({
+        ok: false,
+        error: "INTERNAL_ERROR",
+      });
+    }
+  }
+);
+
+
