@@ -301,26 +301,45 @@ newsClipsRouter.post(
 newsClipsRouter.get("/:id/glossary", async (req, res) => {
   const { id } = req.params;
 
-  const clipIssue = await prisma.clipIssue.findUnique({
-    where: { id },
-    select: { glossaryText: true },
-  });
-
-  if (!clipIssue) {
-    return res.status(404).json({ error: "NOT_FOUND" });
-  }
-
-  const raw = clipIssue.glossaryText;
-  if (!raw || raw.trim().length === 0) {
-    return res.json({ items: [] });
-  }
-
   try {
-    const parsed = JSON.parse(raw);
-    const items = Array.isArray(parsed) ? parsed : [];
-    return res.json({ items });
+    // 1) glossaryText만 가져오기
+    const issue = await prisma.clipIssue.findUnique({
+      where: { id },
+      select: { glossaryText: true },
+    });
+
+    if (!issue) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+
+    const raw = issue.glossaryText;
+
+    if (!raw || raw.trim().length === 0) {
+      // DB에 아무것도 없으면 일단 빈 배열
+      return res.json({ items: [] });
+    }
+
+    // 2) JSON 파싱
+    try {
+      const parsed = JSON.parse(raw);
+
+      // 만약 저장 형식이 { items: [...] } 라면 그 안에서 꺼내고,
+      // 그냥 배열이면 그대로 사용
+      const items = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray((parsed as any).items)
+        ? (parsed as any).items
+        : [];
+
+      return res.json({ items });
+    } catch (e) {
+      console.error("[GET /api/news-clips/:id/glossary] parse error:", e);
+      // 파싱 실패해도 API는 깨지지 않게 빈 배열
+      return res.json({ items: [] });
+    }
   } catch (e) {
-    console.error("[news-clips/:id/glossary] parse error:", e);
-    return res.json({ items: [] });
+    console.error("[GET /api/news-clips/:id/glossary] unexpected error:", e);
+    return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
+
