@@ -1,4 +1,3 @@
-
 // src/services/issueGlossary.ts
 import { prisma } from "../lib/prisma";
 import { OpenAI } from "openai";
