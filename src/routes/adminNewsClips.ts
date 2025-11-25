@@ -16,7 +16,7 @@ const router = Router();
 
 /**
  * POST /api/admin/news-clips/ingest
- * 최근 N시간 유튜브 뉴스 클립 RawClip으로 수집
+ * 최근 N시간 유튜브 뉴스 클립 RawClip으로 수집 
  */
 router.post(
   "/news-clips/ingest",
