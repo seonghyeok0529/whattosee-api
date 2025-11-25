@@ -4,7 +4,7 @@ import { prisma } from "../lib/prisma";
 import { IssueStatus, Prisma, ClusterSuggestionStatus, UserStatus } from "@prisma/client";
 import { IssueStatus as PrismaIssueStatus } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
-import { adminAuth } from "../middleware/adminAuth";
+import { adminAuth } from "../middleware/adminAuth"; 
 import { generateIssueSummary } from "../services/generateIssueSummary";
 import { generateIssueTitle } from "../services/generateIssueTitle";
 import { OpenAI } from "openai";
