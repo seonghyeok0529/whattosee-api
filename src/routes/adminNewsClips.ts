@@ -617,7 +617,6 @@ router.post(
           .json({ ok: false, error: "Clip issue not found" });
       }
 
-      // 프론트 adminApi.refreshClipIssueGlossary 에 맞춰서 최소 이렇게 리턴
       return res.json({
         ok: true,
         item: {
