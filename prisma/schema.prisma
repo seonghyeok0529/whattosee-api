@@ -565,6 +565,7 @@ model ClipIssue {
   aiSummary   String?
   progressiveSummary String?  // 진보 성향 클립 요약
   conservativeSummary String? // 보수 성향 클립 요약
+  glossaryText        String?
 
   clipCount   Int      @default(0)
   totalViews  Int      @default(0)
