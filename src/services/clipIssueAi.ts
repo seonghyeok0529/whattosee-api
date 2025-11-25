@@ -1,6 +1,7 @@
 // src/services/clipIssueAi.ts
 import prisma from "../lib/prisma.js";
 import { openai, DEFAULT_MODEL } from "../lib/openai.js";
+import { generateGlossaryText } from "./generateGlossary.js";
 
 function take(str?: string | null, max = 4000) {
   if (!str) return "";
@@ -178,9 +179,10 @@ ${list}
 }
 
 /* -------------------------------------------------------
- * 4) ClipIssue 전체 AI 필드 재생성
+ * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText)
  * ----------------------------------------------------- */
 export async function refreshClipIssueAIFields(clipIssueId: string) {
+  // 제목 / 요약 / 좌·우 요약은 병렬로 생성
   const [title, aiSummary, progressive, conservative] = await Promise.all([
     generateClipIssueTitle(clipIssueId),
     generateClipIssueSummary(clipIssueId),
@@ -188,7 +190,8 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     generateClipIssueSideSummary(clipIssueId, "right"),
   ]);
 
-  const updated = await prisma.clipIssue.update({
+  // 1차 업데이트: 기본 AI 필드 + 클립 목록 로드
+  const updatedBase = await prisma.clipIssue.update({
     where: { id: clipIssueId },
     data: {
       title,
@@ -196,7 +199,45 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
       progressiveSummary: progressive || null,
       conservativeSummary: conservative || null,
     },
+    include: {
+      clips: {
+        include: { rawClip: true },
+        take: 18,
+      },
+    },
   });
 
-  return updated;
+  // glossary용 클립 목록 텍스트 구성
+  const clipsText = updatedBase.clips
+    .map((ic) => {
+      const ch = ic.rawClip?.channel ?? "채널";
+      const t = ic.rawClip?.title ?? "(제목 없음)";
+      return `- [${ch}] ${t}`;
+    })
+    .join("\n");
+
+  const glossaryText = await generateGlossaryText({
+    title: updatedBase.title,
+    // aiSummary가 있으면 우선 사용, 없으면 description 사용
+    summary: updatedBase.aiSummary ?? updatedBase.description ?? null,
+    itemsText: clipsText,
+    locale: "ko",
+    sourceType: "clip",
+  });
+
+  // glossaryText만 별도 업데이트
+  await prisma.clipIssue.update({
+    where: { id: clipIssueId },
+    data: {
+      // @ts-ignore: ClipIssue 모델에 glossaryText 필드 있다고 가정
+      glossaryText,
+    },
+  });
+
+  // 라우터에서 (updated as any).glossaryText 로 접근 가능하도록 합쳐서 반환
+  return {
+    ...updatedBase,
+    // @ts-ignore
+    glossaryText,
+  } as any;
 }
