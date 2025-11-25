@@ -258,6 +258,7 @@ model Issue {
   leftSummary  String?
   rightSummary String?
   thumbnailUrl String?
+  glossaryText String?
 
   dedupKey String? @unique
 
