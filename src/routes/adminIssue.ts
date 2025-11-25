@@ -17,7 +17,6 @@ const openai = new OpenAI({
 
 export const adminIssueRoutes = Router();
 
-
 // 🔧 articleIds = URL 배열을 기준으로 Issue.sources 동기화
 async function syncIssueSourcesByUrls(issueId: string, articleIds?: string[]) {
     if (!Array.isArray(articleIds)) return;
