@@ -598,6 +598,42 @@ router.post(
       }
     }
   );
+
+// 🔄 클립 이슈 용어 사전 재생성
+router.post(
+  "/news-clips/issues/:id/refresh-glossary",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const { id } = req.params as { id: string };
+
+      // 기존에 쓰고 있는 AI 필드 갱신 서비스 재사용
+      const updated = await refreshClipIssueAIFields(id);
+
+      if (!updated) {
+        return res
+          .status(404)
+          .json({ ok: false, error: "Clip issue not found" });
+      }
+
+      // 프론트 adminApi.refreshClipIssueGlossary 에 맞춰서 최소 이렇게 리턴
+      return res.json({
+        ok: true,
+        item: {
+          glossaryText: (updated as any).glossaryText ?? null,
+        },
+      });
+    } catch (err) {
+      console.error(
+        "❌ [POST /admin/news-clips/issues/:id/refresh-glossary] error:",
+        err
+      );
+      next(err);
+    }
+  }
+);
+
   
 
 export default router;
