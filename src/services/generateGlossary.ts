@@ -7,7 +7,7 @@ export type GlossarySourceType = "article" | "clip";
 export interface GenerateGlossaryParams {
   title?: string | null;
   summary?: string | null;
-  itemsText: string;          // "- [출처] 제목" 혹은 "- [채널] 제목" 형식의 목록 문자열
+  itemsText: string;          // "- [출처] 제목" / "- [채널] 제목" 목록 문자열
   locale?: GlossaryLocale;
   sourceType?: GlossarySourceType;
 }
@@ -15,7 +15,6 @@ export interface GenerateGlossaryParams {
 /**
  * 공통 Glossary 생성기
  * - Issue / ClipIssue 둘 다에서 재사용
- * - 반환: string | null (LLM 실패 시 null)
  */
 export async function generateGlossaryText({
   title,
