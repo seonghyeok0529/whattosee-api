@@ -1,4 +1,4 @@
--- CreateTable
+-- CreateTable 
 CREATE TABLE "ClipIssueRelation" (
     "id" TEXT NOT NULL,
     "fromClipIssueId" TEXT NOT NULL,
