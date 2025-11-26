@@ -85,62 +85,59 @@ async function buildClipIssueEngagement(clipIssueId: string, req: Request) {
 /* ─────────────────────────────────────────
    GET /api/news-clips
 ───────────────────────────────────────── */
-// src/routes/newsClips.ts
-
-newsClipsRouter.get("/", async (req, res) => {
-    try {
-      const items = await prisma.clipIssue.findMany({
-        orderBy: { createdAt: "desc" },
-        take: 20,
-        include: {
-          _count: {
-            select: {
-              comments: true,
-            },
-          },
-          // 🔹 가장 먼저 업로드된 클립 1개 같이 조회 (썸네일 fallback용)
-          clips: {
-            include: {
-              rawClip: true,
-            },
-            orderBy: {
-              rawClip: {
-                publishedAt: "asc", // “가장 빨리 업로드된” 기준
-              },
-            },
-            take: 1,
+newsClipsRouter.get("/", async (_req, res) => {
+  try {
+    const items = await prisma.clipIssue.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      include: {
+        _count: {
+          select: {
+            comments: true,
           },
         },
-      });
-  
-      const result = items.map((it) => {
-        // 🔹 fallback: clipIssue.thumbnail 없으면 첫 클립 썸네일 사용
-        const firstClipThumb = it.clips[0]?.rawClip?.thumbnail ?? "";
-  
-        return {
-          id: it.id,
-          title: it.title,
-          description: it.description ?? "",
-          thumbnail: it.thumbnail ?? firstClipThumb,
-          clipCount: it.clipCount,
-          totalViews: it.totalViews,
-          category: it.category ?? "뉴스",
-          isHot: it.isHot,
-          uploadedAt: it.createdAt.toISOString().slice(0, 10),
-          commentCount: it._count.comments,
-          // 🔹 리스트 카드에서 사용할 AI 요약
-          aiSummary: it.aiSummary ?? "",
-        };
-      });
-  
-      res.json({ items: result });
-    } catch (e) {
-      console.error("Failed to fetch news clips:", e);
-      res.status(500).json({ error: "INTERNAL_ERROR" });
-    }
-  });
-  
-  
+        // 🔹 가장 먼저 업로드된 클립 1개 같이 조회 (썸네일 fallback용)
+        clips: {
+          include: {
+            rawClip: true,
+          },
+          orderBy: {
+            rawClip: {
+              publishedAt: "asc", // “가장 빨리 업로드된” 기준
+            },
+          },
+          take: 1,
+        },
+      },
+    });
+
+    const result = items.map((it) => {
+      // 🔹 fallback: clipIssue.thumbnail 없으면 첫 클립 썸네일 사용
+      const firstClipThumb = it.clips[0]?.rawClip?.thumbnail ?? "";
+
+      return {
+        id: it.id,
+        title: it.title,
+        description: it.description ?? "",
+        thumbnail: it.thumbnail ?? firstClipThumb,
+        clipCount: it.clipCount,
+        totalViews: it.totalViews,
+        category: it.category ?? "뉴스",
+        isHot: it.isHot,
+        uploadedAt: it.createdAt.toISOString().slice(0, 10),
+        commentCount: it._count.comments,
+        // 🔹 리스트 카드에서 사용할 AI 요약
+        aiSummary: it.aiSummary ?? "",
+      };
+    });
+
+    res.json({ items: result });
+  } catch (e) {
+    console.error("Failed to fetch news clips:", e);
+    res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
+});
+
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id
    → 뉴스 클립 이슈 상세 (제목/설명/클립들/AI 요약 + 연관 이슈)
@@ -185,21 +182,50 @@ newsClipsRouter.get("/:id", async (req, res) => {
     };
   };
 
-  // 🔗 연관 뉴스 클립 이슈 조회
-  // ⚠️ 여기서 prisma 모델/필드 이름은 실제 스키마에 맞게 수정해줘
+  // 🔗 연관 뉴스 클립 이슈 조회 (썸네일 포함)
   const relations = await prisma.clipIssueRelation.findMany({
     where: {
       OR: [{ fromClipIssueId: id }, { toClipIssueId: id }],
     },
     include: {
-      from: true,
-      to: true,
+      from: {
+        include: {
+          clips: {
+            include: { rawClip: true },
+            orderBy: {
+              rawClip: {
+                publishedAt: "asc",
+              },
+            },
+            take: 1,
+          },
+        },
+      },
+      to: {
+        include: {
+          clips: {
+            include: { rawClip: true },
+            orderBy: {
+              rawClip: {
+                publishedAt: "asc",
+              },
+            },
+            take: 1,
+          },
+        },
+      },
     },
   });
 
   const relatedMap = new Map<
     string,
-    { id: string; title?: string | null; aiSummary?: string | null; createdAt?: string | null }
+    {
+      id: string;
+      title?: string | null;
+      aiSummary?: string | null;
+      createdAt?: string | null;
+      thumbnail?: string | null;
+    }
   >();
 
   for (const r of relations) {
@@ -207,12 +233,18 @@ newsClipsRouter.get("/:id", async (req, res) => {
     if (!target) continue;
     if (target.id === id) continue;
 
+    const firstClipThumb =
+      target.clips?.[0]?.rawClip?.thumbnail ?? null;
+
+    const thumbnail = target.thumbnail ?? firstClipThumb ?? null;
+
     if (!relatedMap.has(target.id)) {
       relatedMap.set(target.id, {
         id: target.id,
         title: target.title ?? null,
         aiSummary: target.aiSummary ?? null,
         createdAt: target.createdAt ? target.createdAt.toISOString() : null,
+        thumbnail,
       });
     }
   }
@@ -235,6 +267,7 @@ newsClipsRouter.get("/:id", async (req, res) => {
 
   res.json(payload);
 });
+
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id/engagement
 ───────────────────────────────────────── */
@@ -330,7 +363,7 @@ newsClipsRouter.post(
 
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id/glossary
-   - ClipIssue.glossaryText 를 읽어서 GlossaryItem[] 형태로 내려줌
+   - ClipIssue.glossaryText 를 그대로 반환
 ───────────────────────────────────────── */
 newsClipsRouter.get("/:id/glossary", async (req, res) => {
   const { id } = req.params;
@@ -345,15 +378,11 @@ newsClipsRouter.get("/:id/glossary", async (req, res) => {
       return res.status(404).json({ error: "NOT_FOUND" });
     }
 
-    // 그대로 반환
     return res.json({
-      text: issue.glossaryText ?? ""
+      text: issue.glossaryText ?? "",
     });
-
   } catch (e) {
     console.error("[GET /api/news-clips/:id/glossary] unexpected error:", e);
     return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
-
-
