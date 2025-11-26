@@ -268,12 +268,9 @@ issuesRouter.get("/", async (req, res) => {
  */
 
 issuesRouter.get("/:id", async (req, res) => {
-  const issueId = req.params.id;
-
-  // 1) 이슈 + sources + persons 먼저 조회
   const issue = await prisma.issue.findFirst({
     where: {
-      id: issueId,
+      id: req.params.id,
       status: IssueStatus.PUBLISHED, // ✅ 비공개 이슈는 404
     },
     select: {
@@ -286,7 +283,7 @@ issuesRouter.get("/:id", async (req, res) => {
       createdAt: true,
       updatedAt: true,
       body: true,
-      thumbnailUrl: true,
+      thumbnailUrl: true, // 🔹 상세에서도 썸네일 제공
       sources: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -301,43 +298,38 @@ issuesRouter.get("/:id", async (req, res) => {
       persons: {
         select: { id: true, name: true, role: true },
       },
+      relatedFrom: {
+        include: {
+          to: {
+            select: {
+              id: true,
+              title: true,
+              summary: true,
+              thumbnailUrl: true,
+              status: true,
+              updatedAt: true,
+            },
+          },
+        },
+      },
+      relatedTo: {
+        include: {
+          from: {
+            select: {
+              id: true,
+              title: true,
+              summary: true,
+              thumbnailUrl: true,
+              status: true,
+              updatedAt: true,
+            },
+          },
+        },
+      },
     },
   });
 
   if (!issue) return res.status(404).json({ error: "NOT_FOUND" });
-
-  // 2) 연관 이슈 관계 조회 (from / to 모두)
-  const relations = await prisma.issueRelation.findMany({
-    where: {
-      OR: [{ fromIssueId: issueId }, { toIssueId: issueId }],
-    },
-    include: {
-      from: true,
-      to: true,
-    },
-  });
-
-  // 3) 연관 이슈 매핑 (PUBLISHED만 노출)
-  const relatedIssues = relations
-    .map((r) => {
-      const isFrom = r.fromIssueId === issueId;
-      const other = isFrom ? r.to : r.from;
-      const direction = isFrom ? "FROM" : "TO";
-
-      // 비공개 이슈는 숨김
-      if (other.status !== IssueStatus.PUBLISHED) return null;
-
-      return {
-        id: other.id,
-        title: other.title,
-        status: other.status,
-        relationId: r.id,
-        relationType: r.relationType,
-        direction, // "FROM" | "TO"
-        createdAt: r.createdAt.toISOString(),
-      };
-    })
-    .filter((x): x is NonNullable<typeof x> => !!x);
 
   const srcs = issue.sources as SimpleSource[];
   const persons = issue.persons as SimplePerson[];
@@ -348,6 +340,46 @@ issuesRouter.get("/:id", async (req, res) => {
   const latest = srcs
     .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
     .reduce((a: number, b: number) => Math.max(a, b), 0);
+
+  const relatedMap = new Map<string, any>();
+
+  // 내가 FROM(상위/원 이슈) → 상대가 TO
+  for (const r of (issue as any).relatedFrom ?? []) {
+    const other = r.to;
+    if (!other) continue;
+    if (other.status !== IssueStatus.PUBLISHED) continue;
+
+    if (!relatedMap.has(other.id)) {
+      relatedMap.set(other.id, {
+        id: other.id,
+        title: other.title,
+        summary: other.summary ?? "",
+        thumbnailUrl: other.thumbnailUrl ?? null,
+        direction: "from" as const, // 이 이슈에서 출발해서 이어지는(파생) 느낌
+        updatedAt: other.updatedAt?.toISOString?.() ?? null,
+      });
+    }
+  }
+
+  // 내가 TO(파생/후속 이슈) ← 상대가 FROM
+  for (const r of (issue as any).relatedTo ?? []) {
+    const other = r.from;
+    if (!other) continue;
+    if (other.status !== IssueStatus.PUBLISHED) continue;
+
+    if (!relatedMap.has(other.id)) {
+      relatedMap.set(other.id, {
+        id: other.id,
+        title: other.title,
+        summary: other.summary ?? "",
+        thumbnailUrl: other.thumbnailUrl ?? null,
+        direction: "to" as const, // 이 이슈로 이어지는 상위/원 이슈 느낌
+        updatedAt: other.updatedAt?.toISOString?.() ?? null,
+      });
+    }
+  }
+
+  const relatedIssues = Array.from(relatedMap.values());
 
   res.json({
     issue: {
@@ -364,7 +396,7 @@ issuesRouter.get("/:id", async (req, res) => {
       leftSources,
       rightSources,
       firstSource,
-      thumbnailUrl: issue.thumbnailUrl ?? null,
+      thumbnailUrl: issue.thumbnailUrl ?? null, // 🔹 상세 상단 이미지용
       sources: srcs.map((s) => ({
         id: (s as any).id,
         outlet: s.outlet,
@@ -381,6 +413,7 @@ issuesRouter.get("/:id", async (req, res) => {
     },
   });
 });
+
 
 issuesRouter.get("/:id/side-summary", async (req, res) => {
   try {
