@@ -40,6 +40,12 @@ enum Role {
   admin
 }
 
+enum Gender {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
 enum IssueRelationKind {
   RELATED    // 일반 연관
   EPISODE_OF // 상·하위 관계 (원 이슈 ↔ 파생 이슈)
@@ -99,6 +105,14 @@ model User {
   ctiType   String?
   ctiScores Json?
 
+  gender        Gender?   // Kakao/Naver 프로필 → MALE/FEMALE/UNKNOWN
+  birthYear     Int?      // 1997 같이 연도만
+  ageRange      String?   // "20-29", "30-39" 처럼 provider 원본 그대로 저장해도 됨
+
+  regionLevel1  String?  // 시
+  regionLevel2  String?  // 군,구
+
+
   agendas     Agenda[]
   comments    AgendaComment[]
   likes       AgendaLike[]
@@ -124,6 +138,43 @@ model User {
   role      Role     @default(user)
   isAdmin   Boolean  @default(false)
   status    UserStatus @default(ACTIVE)
+}
+
+model EventLog {
+  id        String   @id @default(cuid())
+
+  // 🔹 기본 식별 정보
+  eventType String   // 예: "issue_click", "page_view", "tab_change" ...
+  sessionId String   // 프론트에서 sid로 보내는 값
+  userId    String?  // 로그인 된 경우만 채움
+
+  // 🔹 페이지 / 섹션 / 이슈 관련
+  pagePath   String? // location.pathname
+  section    String? // "media" | "user" | ...
+  issueId    String?
+  issueTitle String?
+
+  // 🔹 스냅샷 (이 시점의 유저 상태)
+  ctiTypeSnapshot        String?
+  regionLevel1Snapshot   String?
+  regionLevel2Snapshot   String?
+
+  // 🔹 기술 정보
+  userAgent String?
+  ipHash    String?   // 원본 IP 대신 해시(선택)
+
+  // 🔹 원본 payload 전체 (안전망 + 미래용)
+  payload   Json
+
+  createdAt DateTime @default(now())
+
+  // 🔹 관계
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([eventType, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt])
+  @@index([issueId, createdAt])
 }
 
 model Account {
