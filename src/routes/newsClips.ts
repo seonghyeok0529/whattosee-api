@@ -143,7 +143,7 @@ newsClipsRouter.get("/", async (req, res) => {
   
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id
-   → 뉴스 클립 이슈 상세 (제목/설명/클립들/AI 요약)
+   → 뉴스 클립 이슈 상세 (제목/설명/클립들/AI 요약 + 연관 이슈)
 ───────────────────────────────────────── */
 newsClipsRouter.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -185,6 +185,40 @@ newsClipsRouter.get("/:id", async (req, res) => {
     };
   };
 
+  // 🔗 연관 뉴스 클립 이슈 조회
+  // ⚠️ 여기서 prisma 모델/필드 이름은 실제 스키마에 맞게 수정해줘
+  const relations = await prisma.clipIssueRelation.findMany({
+    where: {
+      OR: [{ fromClipIssueId: id }, { toClipIssueId: id }],
+    },
+    include: {
+      from: true,
+      to: true,
+    },
+  });
+
+  const relatedMap = new Map<
+    string,
+    { id: string; title?: string | null; aiSummary?: string | null; createdAt?: string | null }
+  >();
+
+  for (const r of relations) {
+    const target = r.fromClipIssueId === id ? r.to : r.from;
+    if (!target) continue;
+    if (target.id === id) continue;
+
+    if (!relatedMap.has(target.id)) {
+      relatedMap.set(target.id, {
+        id: target.id,
+        title: target.title ?? null,
+        aiSummary: target.aiSummary ?? null,
+        createdAt: target.createdAt ? target.createdAt.toISOString() : null,
+      });
+    }
+  }
+
+  const relatedClipIssues = Array.from(relatedMap.values());
+
   const payload = {
     id: clipIssue.id,
     title: clipIssue.title,
@@ -196,11 +230,11 @@ newsClipsRouter.get("/:id", async (req, res) => {
     conservativeClips: conservative.map(mapClip),
     progressiveSummary: clipIssue.progressiveSummary ?? "",
     conservativeSummary: clipIssue.conservativeSummary ?? "",
+    relatedClipIssues,
   };
 
   res.json(payload);
 });
-
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id/engagement
 ───────────────────────────────────────── */
