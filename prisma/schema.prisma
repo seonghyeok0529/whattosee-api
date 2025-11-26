@@ -135,6 +135,8 @@ model User {
   articleViewLogs  ArticleViewLog[]
   newsClipViewLogs NewsClipViewLog[]
 
+  eventLogs EventLog[]
+
   role      Role     @default(user)
   isAdmin   Boolean  @default(false)
   status    UserStatus @default(ACTIVE)
