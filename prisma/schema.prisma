@@ -583,8 +583,37 @@ model ClipIssue {
   // 🔥 뉴스 클립 열람 로그 역참조
   viewLogs    NewsClipViewLog[]
 
+  relatedFrom ClipIssueRelation[] @relation("ClipIssueRelationFrom")
+  relatedTo   ClipIssueRelation[] @relation("ClipIssueRelationTo")
+
   // 필요하면 pageView도 ParentType = clipIssue로 재사용 가능
 }
+
+model ClipIssueRelation {
+  id              String   @id @default(cuid())
+  fromClipIssueId String
+  toClipIssueId   String
+  relationType    String?  // 예: "RELATED" | "FOLLOW_UP" 등 (지금은 안 써도 됨)
+  confidence      Float?   // 0~1 추천 점수 (선택)
+  createdAt       DateTime @default(now())
+
+  from ClipIssue @relation(
+    "ClipIssueRelationFrom",
+    fields: [fromClipIssueId],
+    references: [id],
+    onDelete: Cascade
+  )
+  to   ClipIssue @relation(
+    "ClipIssueRelationTo",
+    fields: [toClipIssueId],
+    references: [id],
+    onDelete: Cascade
+  )
+
+  @@unique([fromClipIssueId, toClipIssueId])
+  @@index([toClipIssueId])
+}
+
 
 model ClipIssueComment {
   id          String   @id @default(cuid())
