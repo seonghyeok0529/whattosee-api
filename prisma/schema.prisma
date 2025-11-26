@@ -597,18 +597,8 @@ model ClipIssueRelation {
   confidence      Float?   // 0~1 추천 점수 (선택)
   createdAt       DateTime @default(now())
 
-  from ClipIssue @relation(
-    "ClipIssueRelationFrom",
-    fields: [fromClipIssueId],
-    references: [id],
-    onDelete: Cascade
-  )
-  to   ClipIssue @relation(
-    "ClipIssueRelationTo",
-    fields: [toClipIssueId],
-    references: [id],
-    onDelete: Cascade
-  )
+  from ClipIssue @relation("ClipIssueRelationFrom", fields: [fromClipIssueId], references: [id], onDelete: Cascade)
+  to   ClipIssue @relation("ClipIssueRelationTo",   fields: [toClipIssueId],   references: [id], onDelete: Cascade)
 
   @@unique([fromClipIssueId, toClipIssueId])
   @@index([toClipIssueId])
