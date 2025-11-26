@@ -822,7 +822,8 @@ adminIssueRoutes.post(
 );
 
 /* ─────────────────────────────────────────────
-   7. 이슈 간 연관 관계 추가/삭제 (기존 코드 유지)
+   7. 이슈 간 연관 관계 추가/삭제
+   POST /api/admin/issues/:id/relations
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
   "/issues/:id/relations",
@@ -830,52 +831,88 @@ adminIssueRoutes.post(
   adminAuth,
   async (req: Request, res: Response) => {
     const { id } = req.params;
-    const { targetId } = req.body as { targetId?: string };
 
-    if (!targetId || targetId === id) {
-      return res.status(400).json({ ok: false, message: "invalid targetId" });
+    const {
+      targetIssueId,
+      relationType,
+      direction,
+    } = req.body as {
+      targetIssueId?: string;
+      relationType?: string;
+      direction?: "FROM" | "TO";
+    };
+
+    // 기본 검증
+    if (!targetIssueId || targetIssueId === id) {
+      return res
+        .status(400)
+        .json({ ok: false, message: "invalid targetIssueId" });
     }
 
-    await prisma.issueRelation.upsert({
+    // direction 에 따라 from/to 뒤집기
+    const isToDirection = direction === "TO";
+
+    const link = isToDirection
+      ? {
+          fromIssueId: targetIssueId,
+          toIssueId: id,
+        }
+      : {
+          fromIssueId: id,
+          toIssueId: targetIssueId,
+        };
+
+    const rel = await prisma.issueRelation.upsert({
       where: {
         fromIssueId_toIssueId: {
-          fromIssueId: id,
-          toIssueId: targetId,
+          fromIssueId: link.fromIssueId,
+          toIssueId: link.toIssueId,
         },
       },
       create: {
-        fromIssueId: id,
-        toIssueId: targetId,
-        relationType: "RELATED",
+        ...link,
+        relationType: relationType ?? "RELATED",
       },
-      update: {},
+      update: {
+        relationType: relationType ?? "RELATED",
+      },
+      include: {
+        from: true,
+        to: true,
+      },
     });
 
-    res.json({ ok: true });
+    return res.json({
+      ok: true,
+      item: {
+        relationId: rel.id,
+        issueId: id, // 현재 편집중인 이슈
+        targetIssueId,
+        relationType: rel.relationType,
+        direction: (direction ?? "FROM") as "FROM" | "TO",
+      },
+    });
   }
 );
 
+
 adminIssueRoutes.delete(
-  "/issues/:id/relations/:targetId",
+  "/issues/:id/relations/:relationId",
   requireAuth,
   adminAuth,
   async (req: Request, res: Response) => {
-    const { id, targetId } = req.params;
+    const { relationId } = req.params;
 
     await prisma.issueRelation
       .delete({
-        where: {
-          fromIssueId_toIssueId: {
-            fromIssueId: id,
-            toIssueId: targetId,
-          },
-        },
+        where: { id: relationId },
       })
       .catch(() => null);
 
-    res.json({ ok: true });
+    return res.json({ ok: true });
   }
 );
+
 
 /* ─────────────────────────────────────────────
    8. 유저 / 인물 / 리포트 / 기사 검색 (기존 로직 유지)
