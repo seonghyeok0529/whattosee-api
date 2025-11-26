@@ -266,10 +266,14 @@ issuesRouter.get("/", async (req, res) => {
  * GET /api/issues/:id
  * 상세: 공개(PUBLISHED) 이슈만
  */
+
 issuesRouter.get("/:id", async (req, res) => {
+  const issueId = req.params.id;
+
+  // 1) 이슈 + sources + persons 먼저 조회
   const issue = await prisma.issue.findFirst({
     where: {
-      id: req.params.id,
+      id: issueId,
       status: IssueStatus.PUBLISHED, // ✅ 비공개 이슈는 404
     },
     select: {
@@ -282,7 +286,7 @@ issuesRouter.get("/:id", async (req, res) => {
       createdAt: true,
       updatedAt: true,
       body: true,
-      thumbnailUrl: true, // 🔹 상세에서도 썸네일 제공
+      thumbnailUrl: true,
       sources: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -301,6 +305,39 @@ issuesRouter.get("/:id", async (req, res) => {
   });
 
   if (!issue) return res.status(404).json({ error: "NOT_FOUND" });
+
+  // 2) 연관 이슈 관계 조회 (from / to 모두)
+  const relations = await prisma.issueRelation.findMany({
+    where: {
+      OR: [{ fromIssueId: issueId }, { toIssueId: issueId }],
+    },
+    include: {
+      from: true,
+      to: true,
+    },
+  });
+
+  // 3) 연관 이슈 매핑 (PUBLISHED만 노출)
+  const relatedIssues = relations
+    .map((r) => {
+      const isFrom = r.fromIssueId === issueId;
+      const other = isFrom ? r.to : r.from;
+      const direction = isFrom ? "FROM" : "TO";
+
+      // 비공개 이슈는 숨김
+      if (other.status !== IssueStatus.PUBLISHED) return null;
+
+      return {
+        id: other.id,
+        title: other.title,
+        status: other.status,
+        relationId: r.id,
+        relationType: r.relationType,
+        direction, // "FROM" | "TO"
+        createdAt: r.createdAt.toISOString(),
+      };
+    })
+    .filter((x): x is NonNullable<typeof x> => !!x);
 
   const srcs = issue.sources as SimpleSource[];
   const persons = issue.persons as SimplePerson[];
@@ -327,7 +364,7 @@ issuesRouter.get("/:id", async (req, res) => {
       leftSources,
       rightSources,
       firstSource,
-      thumbnailUrl: issue.thumbnailUrl ?? null, // 🔹 상세 상단 이미지용
+      thumbnailUrl: issue.thumbnailUrl ?? null,
       sources: srcs.map((s) => ({
         id: (s as any).id,
         outlet: s.outlet,
@@ -340,6 +377,7 @@ issuesRouter.get("/:id", async (req, res) => {
         name: p.name,
         role: p.role,
       })),
+      relatedIssues,
     },
   });
 });
