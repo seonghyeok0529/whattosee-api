@@ -2,8 +2,12 @@
 import { Router, type Request } from "express";
 import { prisma } from "../lib/prisma";
 import { requireAuth, type AuthedRequest } from "../middleware/requireAuth";
+import he from "he";
 
 export const newsClipsRouter = Router();
+
+// HTML entity decode helper
+const decode = (s?: string | null) => (s ? he.decode(s) : "");
 
 /* ─────────────────────────────────────────
    공용: engagement(투표 + 댓글) 빌더
@@ -35,11 +39,7 @@ async function buildClipIssueEngagement(clipIssueId: string, req: Request) {
     }),
   ]);
 
-  const stats = {
-    agree: 0,
-    disagree: 0,
-    unsure: 0, // DB의 neutral
-  };
+  const stats = { agree: 0, disagree: 0, unsure: 0 };
 
   for (const v of groupedVotes) {
     if (v.stance === "agree") stats.agree = v._count._all;
@@ -75,11 +75,7 @@ async function buildClipIssueEngagement(clipIssueId: string, req: Request) {
     createdAt: c.createdAt.toISOString(),
   }));
 
-  return {
-    stats,
-    myVote,
-    comments: mappedComments,
-  };
+  return { stats, myVote, comments: mappedComments };
 }
 
 /* ─────────────────────────────────────────
@@ -91,34 +87,22 @@ newsClipsRouter.get("/", async (_req, res) => {
       orderBy: { createdAt: "desc" },
       take: 20,
       include: {
-        _count: {
-          select: {
-            comments: true,
-          },
-        },
-        // 🔹 가장 먼저 업로드된 클립 1개 같이 조회 (썸네일 fallback용)
+        _count: { select: { comments: true } },
         clips: {
-          include: {
-            rawClip: true,
-          },
-          orderBy: {
-            rawClip: {
-              publishedAt: "asc", // “가장 빨리 업로드된” 기준
-            },
-          },
+          include: { rawClip: true },
+          orderBy: { rawClip: { publishedAt: "asc" } },
           take: 1,
         },
       },
     });
 
     const result = items.map((it) => {
-      // 🔹 fallback: clipIssue.thumbnail 없으면 첫 클립 썸네일 사용
       const firstClipThumb = it.clips[0]?.rawClip?.thumbnail ?? "";
 
       return {
         id: it.id,
-        title: it.title,
-        description: it.description ?? "",
+        title: decode(it.title),
+        description: decode(it.description),
         thumbnail: it.thumbnail ?? firstClipThumb,
         clipCount: it.clipCount,
         totalViews: it.totalViews,
@@ -126,8 +110,7 @@ newsClipsRouter.get("/", async (_req, res) => {
         isHot: it.isHot,
         uploadedAt: it.createdAt.toISOString().slice(0, 10),
         commentCount: it._count.comments,
-        // 🔹 리스트 카드에서 사용할 AI 요약
-        aiSummary: it.aiSummary ?? "",
+        aiSummary: decode(it.aiSummary),
       };
     });
 
@@ -140,7 +123,6 @@ newsClipsRouter.get("/", async (_req, res) => {
 
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id
-   → 뉴스 클립 이슈 상세 (제목/설명/클립들/AI 요약 + 연관 이슈)
 ───────────────────────────────────────── */
 newsClipsRouter.get("/:id", async (req, res) => {
   const { id } = req.params;
@@ -149,9 +131,7 @@ newsClipsRouter.get("/:id", async (req, res) => {
     where: { id },
     include: {
       clips: {
-        include: {
-          rawClip: true,
-        },
+        include: { rawClip: true },
       },
     },
   });
@@ -160,7 +140,6 @@ newsClipsRouter.get("/:id", async (req, res) => {
     return res.status(404).json({ error: "NOT_FOUND" });
   }
 
-  // ✅ center + neutral 을 모두 "중립" 그룹으로
   const progressive = clipIssue.clips.filter((c) => c.side === "left");
   const neutral = clipIssue.clips.filter(
     (c) => c.side === "center" || c.side === "neutral"
@@ -171,8 +150,8 @@ newsClipsRouter.get("/:id", async (req, res) => {
     const rc = c.rawClip;
     return {
       id: rc.id,
-      title: rc.title,
-      channel: rc.channel,
+      title: decode(rc.title),
+      channel: decode(rc.channel),
       thumbnail: rc.thumbnail ?? "",
       duration: rc.duration ?? "",
       url: rc.url,
@@ -182,7 +161,7 @@ newsClipsRouter.get("/:id", async (req, res) => {
     };
   };
 
-  // 🔗 연관 뉴스 클립 이슈 조회 (썸네일 포함)
+  // 연관 이슈
   const relations = await prisma.clipIssueRelation.findMany({
     where: {
       OR: [{ fromClipIssueId: id }, { toClipIssueId: id }],
@@ -192,11 +171,7 @@ newsClipsRouter.get("/:id", async (req, res) => {
         include: {
           clips: {
             include: { rawClip: true },
-            orderBy: {
-              rawClip: {
-                publishedAt: "asc",
-              },
-            },
+            orderBy: { rawClip: { publishedAt: "asc" } },
             take: 1,
           },
         },
@@ -205,11 +180,7 @@ newsClipsRouter.get("/:id", async (req, res) => {
         include: {
           clips: {
             include: { rawClip: true },
-            orderBy: {
-              rawClip: {
-                publishedAt: "asc",
-              },
-            },
+            orderBy: { rawClip: { publishedAt: "asc" } },
             take: 1,
           },
         },
@@ -230,8 +201,7 @@ newsClipsRouter.get("/:id", async (req, res) => {
 
   for (const r of relations) {
     const target = r.fromClipIssueId === id ? r.to : r.from;
-    if (!target) continue;
-    if (target.id === id) continue;
+    if (!target || target.id === id) continue;
 
     const firstClipThumb =
       target.clips?.[0]?.rawClip?.thumbnail ?? null;
@@ -241,9 +211,11 @@ newsClipsRouter.get("/:id", async (req, res) => {
     if (!relatedMap.has(target.id)) {
       relatedMap.set(target.id, {
         id: target.id,
-        title: target.title ?? null,
-        aiSummary: target.aiSummary ?? null,
-        createdAt: target.createdAt ? target.createdAt.toISOString() : null,
+        title: decode(target.title),
+        aiSummary: decode(target.aiSummary),
+        createdAt: target.createdAt
+          ? target.createdAt.toISOString()
+          : null,
         thumbnail,
       });
     }
@@ -253,15 +225,15 @@ newsClipsRouter.get("/:id", async (req, res) => {
 
   const payload = {
     id: clipIssue.id,
-    title: clipIssue.title,
-    description: clipIssue.description ?? "",
+    title: decode(clipIssue.title),
+    description: decode(clipIssue.description),
     category: clipIssue.category ?? "뉴스",
-    aiSummary: clipIssue.aiSummary ?? "",
+    aiSummary: decode(clipIssue.aiSummary),
     progressiveClips: progressive.map(mapClip),
     neutralClips: neutral.map(mapClip),
     conservativeClips: conservative.map(mapClip),
-    progressiveSummary: clipIssue.progressiveSummary ?? "",
-    conservativeSummary: clipIssue.conservativeSummary ?? "",
+    progressiveSummary: decode(clipIssue.progressiveSummary),
+    conservativeSummary: decode(clipIssue.conservativeSummary),
     relatedClipIssues,
   };
 
@@ -363,7 +335,6 @@ newsClipsRouter.post(
 
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id/glossary
-   - ClipIssue.glossaryText 를 그대로 반환
 ───────────────────────────────────────── */
 newsClipsRouter.get("/:id/glossary", async (req, res) => {
   const { id } = req.params;
