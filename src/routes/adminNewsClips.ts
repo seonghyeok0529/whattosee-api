@@ -17,7 +17,8 @@ const router = Router();
    HTML 엔티티 디코딩 유틸 (이 파일 안에서만 사용)
 ---------------------------------------------------- */
 function decodeHtml(str: string | null | undefined): string | null {
-  if (!str) return str;
+  // null / undefined 둘 다 여기서 처리해서 항상 string | null만 리턴
+  if (str == null) return null;
 
   return str
     .replace(/&quot;/g, '"')
@@ -79,7 +80,7 @@ router.post(
         decodeObject({
           ok: true,
           ...result,
-        })
+        } as Record<string, any>)
       );
     } catch (err) {
       next(err);
@@ -158,7 +159,7 @@ router.post(
         decodeObject({
           ...result,
           ok: true,
-        })
+        } as Record<string, any>)
       );
     } catch (err) {
       next(err);
@@ -204,7 +205,9 @@ router.get(
         }))
       );
 
-      res.json({ items: clips.map((c) => decodeObject(c as any)) });
+      res.json({
+        items: clips.map((c) => decodeObject(c as any)),
+      });
     } catch (err) {
       next(err);
     }
@@ -242,7 +245,9 @@ router.get(
         },
       });
 
-      res.json({ items: items.map((i) => decodeObject(i as any)) });
+      res.json({
+        items: items.map((i) => decodeObject(i as any)),
+      });
     } catch (err) {
       next(err);
     }
@@ -422,7 +427,7 @@ router.get(
           ...issue,
           clips: rawClips,
           relatedClipIssues,
-        }),
+        } as any),
       });
     } catch (err) {
       next(err);
@@ -532,7 +537,7 @@ router.post(
         item: decodeObject({
           ...issue,
           clips: rawClips,
-        }),
+        } as any),
       });
     } catch (err) {
       console.error("❌ [POST /admin/news-clips/issues] error:", err);
@@ -612,7 +617,7 @@ router.patch(
         item: decodeObject({
           ...issue,
           clips: rawClips,
-        }),
+        } as any),
       });
     } catch (err) {
       console.error("❌ [PATCH /admin/news-clips/issues/:id] error:", err);
@@ -708,7 +713,7 @@ router.post(
           aiSummary: updated.aiSummary ?? null,
           leftSummary: updated.progressiveSummary ?? null,
           rightSummary: updated.conservativeSummary ?? null,
-        }),
+        } as Record<string, any>),
       });
     } catch (err) {
       console.error(
@@ -743,7 +748,7 @@ router.post(
         item: decodeObject({
           leftSummary: updated.progressiveSummary ?? null,
           rightSummary: updated.conservativeSummary ?? null,
-        }),
+        } as Record<string, any>),
       });
     } catch (err) {
       console.error(
@@ -777,7 +782,7 @@ router.post(
         ok: true,
         item: decodeObject({
           glossaryText: (updated as any).glossaryText ?? null,
-        }),
+        } as Record<string, any>),
       });
     } catch (err) {
       console.error(
