@@ -13,6 +13,56 @@ import { refreshClipIssueAIFields } from "../services/clipIssueAi";
 
 const router = Router();
 
+/* ----------------------------------------------------
+   HTML 엔티티 디코딩 유틸 (이 파일 안에서만 사용)
+---------------------------------------------------- */
+function decodeHtml(str: string | null | undefined): string | null {
+  if (!str) return str;
+
+  return str
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&nbsp;/g, " ");
+}
+
+// 객체 전체 디코드 (string, array, nested object 포함)
+// Date 같은 객체는 건들지 않도록 예외 처리
+function decodeObject<T extends Record<string, any>>(obj: T): T {
+  const result: Record<string, any> = {};
+
+  for (const key of Object.keys(obj)) {
+    const value = obj[key];
+
+    if (typeof value === "string") {
+      result[key] = decodeHtml(value);
+    } else if (value instanceof Date) {
+      result[key] = value; // 날짜는 그대로 유지
+    } else if (Array.isArray(value)) {
+      result[key] = value.map((v) => {
+        if (typeof v === "string") {
+          return decodeHtml(v);
+        }
+        if (v instanceof Date) {
+          return v;
+        }
+        if (typeof v === "object" && v !== null) {
+          return decodeObject(v as Record<string, any>);
+        }
+        return v;
+      });
+    } else if (typeof value === "object" && value !== null) {
+      result[key] = decodeObject(value as Record<string, any>);
+    } else {
+      result[key] = value;
+    }
+  }
+
+  return result as T;
+}
+
 /**
  * POST /api/admin/news-clips/ingest
  * 최근 N시간 유튜브 뉴스 클립 RawClip으로 수집
@@ -25,10 +75,12 @@ router.post(
     try {
       const hours = req.body?.hours ? Number(req.body.hours) : undefined;
       const result = await ingestYoutubeNewsClips({ hours });
-      res.json({
-        ok: true,
-        ...result,
-      });
+      res.json(
+        decodeObject({
+          ok: true,
+          ...result,
+        })
+      );
     } catch (err) {
       next(err);
     }
@@ -79,7 +131,7 @@ router.get(
         _count: issue._count,
       }));
 
-      res.json({ items });
+      res.json({ items: items.map((i) => decodeObject(i)) });
     } catch (err) {
       next(err);
     }
@@ -102,10 +154,12 @@ router.post(
 
       const result = await clusterYoutubeNewsClips({ minGroupSize });
 
-      res.json({
-        ...result,
-        ok: true,
-      });
+      res.json(
+        decodeObject({
+          ...result,
+          ok: true,
+        })
+      );
     } catch (err) {
       next(err);
     }
@@ -150,7 +204,7 @@ router.get(
         }))
       );
 
-      res.json({ items: clips });
+      res.json({ items: clips.map((c) => decodeObject(c as any)) });
     } catch (err) {
       next(err);
     }
@@ -188,7 +242,7 @@ router.get(
         },
       });
 
-      res.json({ items });
+      res.json({ items: items.map((i) => decodeObject(i as any)) });
     } catch (err) {
       next(err);
     }
@@ -364,11 +418,11 @@ router.get(
 
       res.json({
         ok: true,
-        item: {
+        item: decodeObject({
           ...issue,
           clips: rawClips,
           relatedClipIssues,
-        },
+        }),
       });
     } catch (err) {
       next(err);
@@ -475,10 +529,10 @@ router.post(
 
       res.json({
         ok: true,
-        item: {
+        item: decodeObject({
           ...issue,
           clips: rawClips,
-        },
+        }),
       });
     } catch (err) {
       console.error("❌ [POST /admin/news-clips/issues] error:", err);
@@ -555,10 +609,10 @@ router.patch(
 
       res.json({
         ok: true,
-        item: {
+        item: decodeObject({
           ...issue,
           clips: rawClips,
-        },
+        }),
       });
     } catch (err) {
       console.error("❌ [PATCH /admin/news-clips/issues/:id] error:", err);
@@ -650,11 +704,11 @@ router.post(
 
       return res.json({
         ok: true,
-        item: {
+        item: decodeObject({
           aiSummary: updated.aiSummary ?? null,
           leftSummary: updated.progressiveSummary ?? null,
           rightSummary: updated.conservativeSummary ?? null,
-        },
+        }),
       });
     } catch (err) {
       console.error(
@@ -686,10 +740,10 @@ router.post(
 
       res.json({
         ok: true,
-        item: {
+        item: decodeObject({
           leftSummary: updated.progressiveSummary ?? null,
           rightSummary: updated.conservativeSummary ?? null,
-        },
+        }),
       });
     } catch (err) {
       console.error(
@@ -721,9 +775,9 @@ router.post(
 
       return res.json({
         ok: true,
-        item: {
+        item: decodeObject({
           glossaryText: (updated as any).glossaryText ?? null,
-        },
+        }),
       });
     } catch (err) {
       console.error(
