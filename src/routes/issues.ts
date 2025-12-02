@@ -5,7 +5,7 @@ import { IssueStatus, type SourceSide } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { getOrCreateIssueSummary } from "../services/issueSummary.js";
 import { generateSideSummary } from "@/services/generateSideSummary.js";
-import { OpenAI } from "openai"; 
+import { OpenAI } from "openai";
 
 export const issuesRouter = Router();
 
@@ -266,7 +266,6 @@ issuesRouter.get("/", async (req, res) => {
  * GET /api/issues/:id
  * 상세: 공개(PUBLISHED) 이슈만
  */
-
 issuesRouter.get("/:id", async (req, res) => {
   const issue = await prisma.issue.findFirst({
     where: {
@@ -331,13 +330,37 @@ issuesRouter.get("/:id", async (req, res) => {
 
   if (!issue) return res.status(404).json({ error: "NOT_FOUND" });
 
-  const srcs = issue.sources as SimpleSource[];
+  const rawSrcs = issue.sources as any[];
   const persons = issue.persons as SimplePerson[];
 
-  const leftSources = uniqueTop(srcs, "left", 6);
-  const rightSources = uniqueTop(srcs, "right", 6);
-  const firstSource = firstSourceName(srcs);
-  const latest = srcs
+  // 🔥 1) 이 이슈의 기사 URL 목록
+  const urls = rawSrcs
+    .map((s) => s.url as string | null)
+    .filter((u): u is string => !!u);
+
+  // 🔥 2) RawArticle 에서 썸네일 매핑
+  const thumbMap = new Map<string, string | null>();
+  if (urls.length > 0) {
+    const raws = await prisma.rawArticle.findMany({
+      where: { url: { in: urls } },
+      select: { url: true, thumbnail: true },
+    });
+    for (const r of raws) {
+      thumbMap.set(r.url, r.thumbnail ?? null);
+    }
+  }
+
+  // left/right 소스 계산용 SimpleSource
+  const simpleSrcs: SimpleSource[] = rawSrcs.map((s) => ({
+    outlet: s.outlet,
+    side: s.side,
+    createdAt: s.createdAt,
+  }));
+
+  const leftSources = uniqueTop(simpleSrcs, "left", 6);
+  const rightSources = uniqueTop(simpleSrcs, "right", 6);
+  const firstSource = firstSourceName(simpleSrcs);
+  const latest = simpleSrcs
     .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
     .reduce((a: number, b: number) => Math.max(a, b), 0);
 
@@ -397,13 +420,24 @@ issuesRouter.get("/:id", async (req, res) => {
       rightSources,
       firstSource,
       thumbnailUrl: issue.thumbnailUrl ?? null, // 🔹 상세 상단 이미지용
-      sources: srcs.map((s) => ({
-        id: (s as any).id,
-        outlet: s.outlet,
-        title: (s as any).title,
-        url: (s as any).url,
-        side: s.side,
-      })),
+      // 🔥 3) 기사 리스트용 소스 + 썸네일/작성일 포함
+      sources: rawSrcs.map((s) => {
+        const thumb = thumbMap.get(s.url) ?? null;
+        return {
+          id: s.id,
+          outlet: s.outlet,
+          title: s.title,
+          url: s.url,
+          side: s.side,
+          createdAt: s.createdAt
+            ? (s.createdAt instanceof Date
+                ? s.createdAt.toISOString()
+                : s.createdAt)
+            : null,
+          thumbnail: thumb,
+          thumbnailUrl: thumb,
+        };
+      }),
       persons: persons.map((p) => ({
         id: p.id,
         name: p.name,
@@ -413,7 +447,6 @@ issuesRouter.get("/:id", async (req, res) => {
     },
   });
 });
-
 
 issuesRouter.get("/:id/side-summary", async (req, res) => {
   try {
@@ -437,8 +470,6 @@ issuesRouter.get("/:id/side-summary", async (req, res) => {
       side === "left" ? issue.leftSummary : issue.rightSummary;
 
     if (!summary || summary.trim().length === 0) {
-      // ⛔ 여기서는 더 이상 제목 기반 generateSideSummary 안 쓰고,
-      // 관리자에서 아직 요약을 안 돌린 상태라는 걸 알려줌
       return res.status(404).json({
         ok: false,
         error: "SUMMARY_NOT_READY",
@@ -527,7 +558,7 @@ ${tags.join(", ") || "(태그 없음)"}
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-4.1-mini", // 👉 너가 실제 쓰는 모델명으로 바꿔도 됨
+      model: "gpt-4.1-mini",
       messages: [
         {
           role: "system",
@@ -565,7 +596,6 @@ ${tags.join(", ") || "(태그 없음)"}
             }))
         : [];
 
-    // 아무 것도 못 뽑았으면 태그 몇 개라도 돌려주기 (프론트 fallback)
     const safeItems =
       items.length > 0
         ? items
@@ -580,7 +610,6 @@ ${tags.join(", ") || "(태그 없음)"}
     return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
 });
-
 
 // Related people (별도 personRef 테이블용)
 issuesRouter.get("/:id/people", async (req, res) => {
