@@ -1,4 +1,4 @@
-//commntes.ts
+//comments.ts
 
 import { Router } from "express";
 import prisma from "../lib/prisma.js";
