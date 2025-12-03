@@ -13,7 +13,7 @@ const noStore = (res: any) => res.set("Cache-Control", "no-store");
 
 const REFRESH_COOKIE = "rt";
 const REFRESH_DAYS = parseInt(process.env.REFRESH_TOKEN_DAYS ?? "30", 10);
-const CLIENT_URL = process.env.CLIENT_URL!; // 예: http://localhost:3000
+const CLIENT_URL = process.env.CLIENT_URL!; // 예: https://whattosee.now
 const EMAIL_AUTH_ENABLED = (process.env.AUTH_EMAIL_ENABLED ?? "false") === "true";
 
 /** JWT ===== */
@@ -52,7 +52,7 @@ const stateCookieOpts = {
   maxAge: 5 * 60 * 1000,
 };
 
-// 🔹 앱에서 넘기는 딥링크 redirect_uri (예: whattosee://oauth-callback)
+// 🔹 앱에서 넘기는 딥링크 redirect_uri (예: exp://.../oauth-callback, whattoseeapp://oauth-callback)
 const APP_REDIRECT_COOKIE = "app_redirect";
 const appRedirectCookieOpts = stateCookieOpts;
 
@@ -61,7 +61,7 @@ const appRedirectCookieOpts = stateCookieOpts;
 ────────────────────────────── */
 const oauthClient = new OAuth2Client({
   clientId: process.env.GOOGLE_CLIENT_ID!,
-  clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+  clientSecret: process.env.GOOGLE_SECRET ?? process.env.GOOGLE_CLIENT_SECRET!,
   redirectUri: process.env.GOOGLE_REDIRECT_URI!, // 예: https://api.whattosee.now/api/auth/google/callback
 });
 
@@ -80,10 +80,17 @@ router.get("/google", (req, res) => {
     res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
   }
 
+  // ✅ state 에도 platform / redirect_uri 저장 (쿠키가 안 붙어도 복구 가능)
+  const statePayload = JSON.stringify({
+    platform: platform ?? "web",
+    redirect_uri: redirect_uri ?? null,
+  });
+
   const url = oauthClient.generateAuthUrl({
     access_type: "offline",
     scope: ["openid", "email", "profile"],
     prompt: "consent",
+    state: statePayload,
   });
 
   console.log("[AUTH /google] generated Google auth URL:", url);
@@ -95,7 +102,10 @@ async function getGoogleUserProfile(
 ): Promise<{ email: string; name?: string }> {
   console.log("[AUTH getGoogleUserProfile] code:", code);
   const { tokens } = await oauthClient.getToken(code);
-  console.log("[AUTH getGoogleUserProfile] tokens received, has id_token:", !!tokens.id_token);
+  console.log(
+    "[AUTH getGoogleUserProfile] tokens received, has id_token:",
+    !!tokens.id_token
+  );
 
   if (!tokens.id_token) throw new Error("Missing id_token");
   const ticket = await oauthClient.verifyIdToken({
@@ -283,11 +293,26 @@ router.get("/google/callback", async (req, res) => {
       return res.redirect(CLIENT_URL);
     }
 
-    // 🔹 앱 redirect_uri 쿠키 읽기
-    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
-    console.log("[AUTH /google/callback] appRedirect:", appRedirect);
+    // 🔹 1순위: 쿠키에서 앱 redirect 읽기
+    let appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
+    console.log("[AUTH /google/callback] appRedirect from cookie:", appRedirect);
 
-    if (appRedirect) {
+    // 🔹 2순위: state 에서 복구 (쿠키가 안 붙은 경우 대비)
+    if (!appRedirect && req.query.state) {
+      try {
+        const stateRaw = req.query.state as string;
+        const decoded = JSON.parse(stateRaw);
+        if (decoded && typeof decoded.redirect_uri === "string") {
+          appRedirect = decoded.redirect_uri;
+          console.log("[AUTH /google/callback] appRedirect from state:", appRedirect);
+        }
+      } catch (e) {
+        console.warn("[AUTH /google/callback] failed to parse state:", e);
+      }
+    }
+
+    // 쿠키 정리
+    if (req.cookies?.[APP_REDIRECT_COOKIE]) {
       res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
     }
 
@@ -331,12 +356,14 @@ router.get("/google/callback", async (req, res) => {
 
     const nextParam = (req.query.next as string | undefined) ?? "/";
 
-    // 🔹 앱 요청이면: 앱 딥링크로 토큰 전달
+    // ✅ 앱 요청이면: 앱 딥링크로 토큰 전달
     if (appRedirect) {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
       const redirectUrl = existing
-        ? `${base}${sep}token=${encodeURIComponent(accessToken)}&next=${encodeURIComponent(nextParam)}`
+        ? `${base}${sep}token=${encodeURIComponent(
+            accessToken
+          )}&next=${encodeURIComponent(nextParam)}`
         : `${base}${sep}token=${encodeURIComponent(accessToken)}&new=1`;
 
       console.log("[AUTH /google/callback] redirect to app:", redirectUrl);
