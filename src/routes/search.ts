@@ -1,10 +1,13 @@
 // src/routes/search.ts
 import { Router, type Request, type Response } from "express";
 import prisma from "../lib/prisma.js";
+import he from "he";
 
 export const searchRouter = Router();
 
 type Scope = "media" | "user" | "all";
+
+const decode = (s?: string | null) => (s ? he.decode(s) : "");
 
 searchRouter.get("/", async (req: Request, res: Response) => {
   const q = String(req.query.q ?? "").trim();
@@ -22,14 +25,13 @@ searchRouter.get("/", async (req: Request, res: Response) => {
   try {
     /* ────────────────────────────────
      * 1) 인터넷 기사 이슈 검색 (Issue)
-     *    - PUBLISHED 된 이슈만
      * ──────────────────────────────── */
     const issuesPromise =
       scope === "user"
         ? Promise.resolve([] as any[])
         : prisma.issue.findMany({
             where: {
-              status: "PUBLISHED",
+              status: "PUBLISHED", // 🔥 등록(공개)된 이슈만
               OR: [
                 { title:   { contains: q, mode: "insensitive" } },
                 { summary: { contains: q, mode: "insensitive" } },
@@ -72,7 +74,7 @@ searchRouter.get("/", async (req: Request, res: Response) => {
 
     /* ────────────────────────────────
      * 2) 뉴스 클립 이슈 검색 (ClipIssue)
-     *    - 썸네일 / 클립 개수 / uploadedAt 대응
+     *    → /api/news-clips 와 동일한 로직으로 썸네일 구성
      * ──────────────────────────────── */
     const clipIssuesPromise =
       scope === "user"
@@ -80,31 +82,25 @@ searchRouter.get("/", async (req: Request, res: Response) => {
         : prisma.clipIssue.findMany({
             where: {
               OR: [
-                { title: { contains: q, mode: "insensitive" } },
+                { title:       { contains: q, mode: "insensitive" } },
                 { description: { contains: q, mode: "insensitive" } },
-                { category: { contains: q, mode: "insensitive" } },
+                { category:    { contains: q, mode: "insensitive" } },
               ],
             },
             orderBy: { createdAt: "desc" },
             take: 30,
-            select: {
-              id: true,
-              title: true,
-              description: true,
-              category: true,
-              thumbnail: true,
-              isHot: true,
-              aiSummary: true,
-              progressiveSummary: true,
-              conservativeSummary: true,
-              clipCount: true,   // 🔥 클립 개수
-              createdAt: true,   // 🔥 uploadedAt 계산용
+            include: {
+              _count: { select: { comments: true } },
+              clips: {
+                include: { rawClip: true },
+                orderBy: { rawClip: { publishedAt: "asc" } },
+                take: 1,
+              },
             },
           });
 
     /* ────────────────────────────────
      * 3) 유저 아젠다 검색 (Agenda)
-     *    - summary 필드도 같이 내려주기
      * ──────────────────────────────── */
     const agendasPromise =
       scope === "media"
@@ -112,7 +108,7 @@ searchRouter.get("/", async (req: Request, res: Response) => {
         : prisma.agenda.findMany({
             where: {
               OR: [
-                { title: { contains: q, mode: "insensitive" } },
+                { title:   { contains: q, mode: "insensitive" } },
                 { content: { contains: q, mode: "insensitive" } },
               ],
             },
@@ -139,7 +135,7 @@ searchRouter.get("/", async (req: Request, res: Response) => {
         : prisma.communityPost.findMany({
             where: {
               OR: [
-                { title: { contains: q, mode: "insensitive" } },
+                { title:   { contains: q, mode: "insensitive" } },
                 { content: { contains: q, mode: "insensitive" } },
               ],
             },
@@ -166,7 +162,7 @@ searchRouter.get("/", async (req: Request, res: Response) => {
             },
           });
 
-    const [issues, clipIssuesRaw, agendasRaw, communityPostsRaw] =
+    const [issues, clipIssuesRaw, agendas, communityPostsRaw] =
       await Promise.all([
         issuesPromise,
         clipIssuesPromise,
@@ -174,36 +170,34 @@ searchRouter.get("/", async (req: Request, res: Response) => {
         communityPostsPromise,
       ]);
 
-    /* ────────────────────────────────
-     * 뉴스 클립 이슈 매핑
-     *  - NewsClipIssueCard에서 기대하는 필드 맞춰주기
-     *    thumbnail / clipCount / uploadedAt / aiSummary
-     * ──────────────────────────────── */
-    const clipIssues = (clipIssuesRaw as any[]).map((c) => ({
-      ...c,
-      // description이 있을 때 aiSummary가 없으면 fallback
-      aiSummary: c.aiSummary ?? c.description ?? null,
-      clipCount: c.clipCount ?? 0,
-      uploadedAt: c.createdAt?.toISOString?.().slice(0, 10) ?? "",
-    }));
+    /* ───────── ClipIssue → NewsClipIssue 형태로 변환 ───────── */
+    const clipIssues = (clipIssuesRaw as any[]).map((it) => {
+      const firstClipThumb = it.clips?.[0]?.rawClip?.thumbnail ?? "";
+      const thumb = it.thumbnail ?? firstClipThumb;
 
-    /* ────────────────────────────────
-     * 아젠다 매핑
-     *  - 기존 필드는 그대로 두고 summary만 추가
-     * ──────────────────────────────── */
-    const agendas = (agendasRaw as any[]).map((a) => {
-      const content = a.content ?? "";
-      const summary =
-        content.length > 120 ? `${content.slice(0, 120)}...` : content;
+      const created =
+        it.createdAt instanceof Date
+          ? it.createdAt
+          : new Date(it.createdAt);
+
       return {
-        ...a,
-        summary,
+        id: it.id,
+        title: decode(it.title),
+        description: decode(it.description),
+        thumbnail: thumb,
+        clipCount: it.clipCount,          // schema에 있는 필드
+        totalViews: it.totalViews,        // 있으면 같이 내려줌
+        category: it.category ?? "뉴스",
+        isHot: it.isHot,
+        uploadedAt: created.toISOString().slice(0, 10),
+        commentCount: it._count?.comments ?? 0,
+        aiSummary: decode(it.aiSummary),
+        progressiveSummary: decode(it.progressiveSummary),
+        conservativeSummary: decode(it.conservativeSummary),
       };
     });
 
-    /* ────────────────────────────────
-     * CommunityPost → CommunityPostSummary
-     * ──────────────────────────────── */
+    /* ───────── CommunityPost → CommunityPostSummary ───────── */
     const communityPosts = (communityPostsRaw as any[]).map((p) => ({
       id: p.id,
       title: p.title,
