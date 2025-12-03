@@ -24,7 +24,6 @@ const parser = new Parser({
 function loadFeeds(): FeedConf[] {
   const path = process.env.NEWS_FEEDS_FILE?.trim();
   let raw = "";
-
   if (path && fs.existsSync(path)) {
     raw = fs.readFileSync(path, "utf8");
   } else {
@@ -34,28 +33,21 @@ function loadFeeds(): FeedConf[] {
   if (!raw) return [];
 
   try {
-    const parsed = JSON.parse(raw);
-
-    // ✅ 1) 최상단이 배열인 경우
-    // ✅ 2) { sources: [...] } 형태
-    // ✅ 3) { feeds: [...] } 형태
-    const arr: any[] =
-      Array.isArray(parsed)
-        ? parsed
-        : Array.isArray((parsed as any).sources)
-        ? (parsed as any).sources
-        : Array.isArray((parsed as any).feeds)
-        ? (parsed as any).feeds
+    const json = JSON.parse(raw);
+    const arr = Array.isArray(json)
+      ? json
+      : Array.isArray((json as any).feeds)
+        ? (json as any).feeds
         : [];
 
-    if (!arr.length) return [];
+    if (!Array.isArray(arr)) return [];
 
     return arr
-      .map((x: any) => ({
+      .map((x) => ({
         outlet: String(x.outlet ?? ""),
         url: String(x.url ?? ""),
         side: (["left", "center", "right", "neutral"] as const).includes(
-          x.side,
+          x.side
         )
           ? (x.side as SourceSide)
           : "center",
@@ -66,6 +58,7 @@ function loadFeeds(): FeedConf[] {
     return [];
   }
 }
+
 
 /** 안전한 날짜 변환 */
 function toDate(d?: string | number | Date | null): Date {
