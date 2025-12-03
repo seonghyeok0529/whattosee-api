@@ -62,7 +62,7 @@ const appRedirectCookieOpts = stateCookieOpts;
 const oauthClient = new OAuth2Client({
   clientId: process.env.GOOGLE_CLIENT_ID!,
   clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-  redirectUri: process.env.GOOGLE_REDIRECT_URI!, // 예: http://localhost:8000/api/auth/google/callback
+  redirectUri: process.env.GOOGLE_REDIRECT_URI!, // 예: https://api.whattosee.now/api/auth/google/callback
 });
 
 // 🔹 앱/웹 공통 진입점
@@ -72,8 +72,11 @@ router.get("/google", (req, res) => {
     redirect_uri?: string;
   };
 
+  console.log("[AUTH /google] platform:", platform, "redirect_uri:", redirect_uri);
+
   // 앱에서 온 요청이면, 앱 딥링크 redirect_uri를 쿠키에 저장
   if (platform === "app" && redirect_uri) {
+    console.log("[AUTH /google] set APP_REDIRECT_COOKIE:", redirect_uri);
     res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
   }
 
@@ -82,19 +85,31 @@ router.get("/google", (req, res) => {
     scope: ["openid", "email", "profile"],
     prompt: "consent",
   });
+
+  console.log("[AUTH /google] generated Google auth URL:", url);
   return res.redirect(url);
 });
 
 async function getGoogleUserProfile(
   code: string
 ): Promise<{ email: string; name?: string }> {
+  console.log("[AUTH getGoogleUserProfile] code:", code);
   const { tokens } = await oauthClient.getToken(code);
+  console.log("[AUTH getGoogleUserProfile] tokens received, has id_token:", !!tokens.id_token);
+
   if (!tokens.id_token) throw new Error("Missing id_token");
   const ticket = await oauthClient.verifyIdToken({
     idToken: tokens.id_token,
     audience: process.env.GOOGLE_CLIENT_ID!,
   });
   const p = ticket.getPayload();
+  console.log("[AUTH getGoogleUserProfile] payload:", {
+    email: p?.email,
+    name: p?.name,
+    given_name: p?.given_name,
+    family_name: p?.family_name,
+  });
+
   if (!p?.email) throw new Error("No email in Google ID token");
   return { email: p.email, name: p.name ?? p.given_name ?? p.family_name };
 }
@@ -259,21 +274,29 @@ router.get("/me", async (req, res) => {
 /* Google 콜백 ==================== */
 router.get("/google/callback", async (req, res) => {
   try {
+    console.log("[AUTH /google/callback] query:", req.query);
+    console.log("[AUTH /google/callback] cookies:", req.cookies);
+
     const code = req.query.code as string;
-    if (!code) return res.redirect(CLIENT_URL);
+    if (!code) {
+      console.warn("[AUTH /google/callback] missing code, redirect to CLIENT_URL");
+      return res.redirect(CLIENT_URL);
+    }
 
     // 🔹 앱 redirect_uri 쿠키 읽기
-    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as
-      | string
-      | undefined;
+    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
+    console.log("[AUTH /google/callback] appRedirect:", appRedirect);
+
     if (appRedirect) {
       res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
     }
 
     const { email, name } = await getGoogleUserProfile(code);
+    console.log("[AUTH /google/callback] google profile:", { email, name });
 
     // 기존 유저 조회 (username/nickname 절대 덮어쓰지 않기)
     const existing = await prisma.user.findUnique({ where: { email } });
+    console.log("[AUTH /google/callback] existing user:", !!existing);
 
     let user;
     if (existing) {
@@ -287,6 +310,7 @@ router.get("/google/callback", async (req, res) => {
           googleId: email,
         },
       });
+      console.log("[AUTH /google/callback] created user:", user.id);
     }
 
     const accessToken = signAccessToken({
@@ -312,10 +336,10 @@ router.get("/google/callback", async (req, res) => {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
       const redirectUrl = existing
-        ? `${base}${sep}token=${encodeURIComponent(
-            accessToken
-          )}&next=${encodeURIComponent(nextParam)}`
+        ? `${base}${sep}token=${encodeURIComponent(accessToken)}&next=${encodeURIComponent(nextParam)}`
         : `${base}${sep}token=${encodeURIComponent(accessToken)}&new=1`;
+
+      console.log("[AUTH /google/callback] redirect to app:", redirectUrl);
       return res.redirect(redirectUrl);
     }
 
@@ -328,6 +352,7 @@ router.get("/google/callback", async (req, res) => {
           accessToken
         )}&new=1`;
 
+    console.log("[AUTH /google/callback] redirect to web:", redirectUrl);
     return res.redirect(redirectUrl);
   } catch (err) {
     console.error("Google OAuth error:", err);
