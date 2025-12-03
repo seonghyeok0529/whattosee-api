@@ -1,5 +1,5 @@
 {
-  "sources": [
+  "feeds": [
     {
       "outlet": "연합뉴스",
       "url": "https://www.yna.co.kr/politics/rss",
