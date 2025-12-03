@@ -14,7 +14,8 @@ const noStore = (res: any) => res.set("Cache-Control", "no-store");
 const REFRESH_COOKIE = "rt";
 const REFRESH_DAYS = parseInt(process.env.REFRESH_TOKEN_DAYS ?? "30", 10);
 const CLIENT_URL = process.env.CLIENT_URL!; // 예: https://whattosee.now
-const EMAIL_AUTH_ENABLED = (process.env.AUTH_EMAIL_ENABLED ?? "false") === "true";
+const EMAIL_AUTH_ENABLED =
+  (process.env.AUTH_EMAIL_ENABLED ?? "false") === "true";
 
 /** JWT ===== */
 function signAccessToken(user: { id: string; email: string | null }) {
@@ -52,17 +53,25 @@ const stateCookieOpts = {
   maxAge: 5 * 60 * 1000,
 };
 
-// 🔹 앱에서 넘기는 딥링크 redirect_uri (예: exp://.../oauth-callback, whattoseeapp://oauth-callback)
+// 🔹 앱에서 넘기는 딥링크 redirect_uri (예: exp://... / whattoseeapp://oauth-callback)
 const APP_REDIRECT_COOKIE = "app_redirect";
 const appRedirectCookieOpts = stateCookieOpts;
 
 /* ──────────────────────────────
    Google OAuth
 ────────────────────────────── */
+
+// ✅ 반드시 /api/auth/google/callback 이어야 함 (Express에선 /api/auth 로 mount)
+const GOOGLE_REDIRECT_URI =
+  process.env.GOOGLE_REDIRECT_URI ??
+  "https://api.whattosee.now/api/auth/google/callback";
+
+console.log("[AUTH] GOOGLE_REDIRECT_URI =", GOOGLE_REDIRECT_URI);
+
 const oauthClient = new OAuth2Client({
   clientId: process.env.GOOGLE_CLIENT_ID!,
-  clientSecret: process.env.GOOGLE_SECRET ?? process.env.GOOGLE_CLIENT_SECRET!,
-  redirectUri: process.env.GOOGLE_REDIRECT_URI!, // 예: https://api.whattosee.now/api/auth/google/callback
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+  redirectUri: GOOGLE_REDIRECT_URI,
 });
 
 // 🔹 앱/웹 공통 진입점
@@ -80,7 +89,7 @@ router.get("/google", (req, res) => {
     res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
   }
 
-  // ✅ state 에도 platform / redirect_uri 저장 (쿠키가 안 붙어도 복구 가능)
+  // CSRF 방지 & 디버깅용 state (필요시 사용)
   const statePayload = JSON.stringify({
     platform: platform ?? "web",
     redirect_uri: redirect_uri ?? null,
@@ -208,7 +217,8 @@ router.post("/refresh", async (req, res) => {
     where: { tokenHash, revokedAt: null, expiresAt: { gt: new Date() } },
     include: { user: true },
   });
-  if (!record?.user) return res.status(401).json({ error: "Invalid refresh token" });
+  if (!record?.user)
+    return res.status(401).json({ error: "Invalid refresh token" });
 
   const accessToken = signAccessToken({
     id: record.user.id,
@@ -289,30 +299,19 @@ router.get("/google/callback", async (req, res) => {
 
     const code = req.query.code as string;
     if (!code) {
-      console.warn("[AUTH /google/callback] missing code, redirect to CLIENT_URL");
+      console.warn(
+        "[AUTH /google/callback] missing code, redirect to CLIENT_URL"
+      );
       return res.redirect(CLIENT_URL);
     }
 
-    // 🔹 1순위: 쿠키에서 앱 redirect 읽기
-    let appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
+    // 🔹 앱 redirect_uri 쿠키 읽기
+    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as
+      | string
+      | undefined;
     console.log("[AUTH /google/callback] appRedirect from cookie:", appRedirect);
 
-    // 🔹 2순위: state 에서 복구 (쿠키가 안 붙은 경우 대비)
-    if (!appRedirect && req.query.state) {
-      try {
-        const stateRaw = req.query.state as string;
-        const decoded = JSON.parse(stateRaw);
-        if (decoded && typeof decoded.redirect_uri === "string") {
-          appRedirect = decoded.redirect_uri;
-          console.log("[AUTH /google/callback] appRedirect from state:", appRedirect);
-        }
-      } catch (e) {
-        console.warn("[AUTH /google/callback] failed to parse state:", e);
-      }
-    }
-
-    // 쿠키 정리
-    if (req.cookies?.[APP_REDIRECT_COOKIE]) {
+    if (appRedirect) {
       res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
     }
 
@@ -356,7 +355,7 @@ router.get("/google/callback", async (req, res) => {
 
     const nextParam = (req.query.next as string | undefined) ?? "/";
 
-    // ✅ 앱 요청이면: 앱 딥링크로 토큰 전달
+    // 🔹 앱 요청이면: 앱 딥링크로 토큰 전달
     if (appRedirect) {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
@@ -562,6 +561,7 @@ router.get("/naver", (req, res) => {
       redirect_uri: process.env.NAVER_REDIRECT_URI!,
       state,
     }).toString();
+  console.log("[NAVER AUTH URL]", authUrl);
   return res.redirect(authUrl);
 });
 
