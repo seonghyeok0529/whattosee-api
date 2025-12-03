@@ -28,16 +28,17 @@ searchRouter.get("/", async (req: Request, res: Response) => {
         ? Promise.resolve([] as any[])
         : prisma.issue.findMany({
             where: {
+              status: "PUBLISHED", // 🔥 등록(공개)된 이슈만
               OR: [
-                { title: { contains: q, mode: "insensitive" } },
+                { title:   { contains: q, mode: "insensitive" } },
                 { summary: { contains: q, mode: "insensitive" } },
-                { body: { contains: q, mode: "insensitive" } },
+                { body:    { contains: q, mode: "insensitive" } },
                 {
                   sources: {
                     some: {
                       OR: [
                         { outlet: { contains: q, mode: "insensitive" } },
-                        { title: { contains: q, mode: "insensitive" } },
+                        { title:  { contains: q, mode: "insensitive" } },
                       ],
                     },
                   },
@@ -67,6 +68,7 @@ searchRouter.get("/", async (req: Request, res: Response) => {
               },
             },
           });
+
 
     /* ────────────────────────────────
      * 2) 뉴스 클립 이슈 검색 (ClipIssue)
