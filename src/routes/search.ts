@@ -6,155 +6,202 @@ export const searchRouter = Router();
 
 type Scope = "media" | "user" | "all";
 
-/** 프런트가 기대하는 Issue 카드용 DTO */
-interface IssueDTO {
-  id: string;
-  title: string;
-  summary: string | null;
-  tags: any;
-  createdAt: Date;
-  updatedAt: Date;
-  sources: { outlet: string | null; side: string | null }[];
-}
-
-/** 프런트가 기대하는 Agenda 카드용 DTO */
-interface AgendaDTO {
-  id: string;
-  title: string;
-  content: string;
-  tags: any;
-  likesCount: number;
-  commentCount: number;
-  createdAt: Date;
-}
-
-/** raw 쿼리에서 공통적으로 쓰는 id 한 개짜리 행 */
-interface IdRow { id: string }
-
 searchRouter.get("/", async (req: Request, res: Response) => {
   const q = String(req.query.q ?? "").trim();
   const scope = (String(req.query.scope ?? "all") as Scope);
-  if (!q) return res.json({ issues: [] as IssueDTO[], agendas: [] as AgendaDTO[] });
+
+  if (!q) {
+    return res.json({
+      issues: [] as any[],
+      clipIssues: [] as any[],
+      agendas: [] as any[],
+      communityPosts: [] as any[],
+    });
+  }
 
   try {
-    /* =========================
-     * 1) 이슈 검색 (Issue)
-     *   - 제목/요약/본문 LIKE NOCASE
-     *   - 태그 json_each LIKE NOCASE
-     *   - 출처(Source) 제목/매체 LIKE NOCASE
-     * ========================= */
-    const issuesPromise: Promise<IssueDTO[] | []> =
-      scope !== "user"
-        ? (async () => {
-            // 1-1. 제목/요약/본문
-            const textRows = await prisma.$queryRaw<IdRow[]>`
-              SELECT id
-              FROM Issue
-              WHERE (title   LIKE '%' || ${q} || '%' COLLATE NOCASE)
-                 OR (summary LIKE '%' || ${q} || '%' COLLATE NOCASE)
-                 OR (body    LIKE '%' || ${q} || '%' COLLATE NOCASE)
-            `;
-
-            // 1-2. 태그
-            const tagRows = await prisma.$queryRaw<IdRow[]>`
-              SELECT DISTINCT i.id
-              FROM Issue AS i, json_each(i.tags) AS t
-              WHERE CAST(t.value AS TEXT) LIKE '%' || ${q} || '%' COLLATE NOCASE
-            `;
-
-            // 1-3. 출처(Source)
-            const sourceRows = await prisma.$queryRaw<IdRow[]>`
-              SELECT DISTINCT issueId AS id
-              FROM Source
-              WHERE (title  LIKE '%' || ${q} || '%' COLLATE NOCASE)
-                 OR (outlet LIKE '%' || ${q} || '%' COLLATE NOCASE)
-            `;
-
-            const idSet = new Set<string>([
-              ...textRows.map(r => r.id),
-              ...tagRows.map(r => r.id),
-              ...sourceRows.map(r => r.id),
-            ]);
-            if (idSet.size === 0) return [];
-
-            // 상세 조회 (최신순)
-            const issues = await prisma.issue.findMany({
-              where: { id: { in: Array.from(idSet) } },
-              orderBy: { createdAt: "desc" },
-              take: 30,
-              select: {
-                id: true,
-                title: true,
-                summary: true,
-                tags: true,
-                createdAt: true,
-                updatedAt: true,
-                sources: {
-                  take: 2,
-                  orderBy: { createdAt: "asc" },
-                  select: { outlet: true, side: true },
+    /* ────────────────────────────────
+     * 1) 인터넷 기사 이슈 검색 (Issue)
+     * ──────────────────────────────── */
+    const issuesPromise =
+      scope === "user"
+        ? Promise.resolve([] as any[])
+        : prisma.issue.findMany({
+            where: {
+              OR: [
+                { title: { contains: q, mode: "insensitive" } },
+                { summary: { contains: q, mode: "insensitive" } },
+                { body: { contains: q, mode: "insensitive" } },
+                {
+                  sources: {
+                    some: {
+                      OR: [
+                        { outlet: { contains: q, mode: "insensitive" } },
+                        { title: { contains: q, mode: "insensitive" } },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+            orderBy: { createdAt: "desc" },
+            take: 30,
+            select: {
+              id: true,
+              title: true,
+              summary: true,
+              tags: true,
+              createdAt: true,
+              updatedAt: true,
+              thumbnailUrl: true,
+              leftSummary: true,
+              rightSummary: true,
+              sources: {
+                take: 4,
+                orderBy: { createdAt: "asc" },
+                select: {
+                  outlet: true,
+                  side: true,
+                  createdAt: true,
                 },
               },
-            });
+            },
+          });
 
-            return issues as IssueDTO[];
-          })()
-        : Promise.resolve([]);
+    /* ────────────────────────────────
+     * 2) 뉴스 클립 이슈 검색 (ClipIssue)
+     * ──────────────────────────────── */
+    const clipIssuesPromise =
+      scope === "user"
+        ? Promise.resolve([] as any[])
+        : prisma.clipIssue.findMany({
+            where: {
+              OR: [
+                { title: { contains: q, mode: "insensitive" } },
+                { description: { contains: q, mode: "insensitive" } },
+                { category: { contains: q, mode: "insensitive" } },
+              ],
+            },
+            orderBy: { createdAt: "desc" },
+            take: 30,
+            select: {
+              id: true,
+              title: true,
+              description: true,
+              category: true,
+              thumbnail: true,
+              isHot: true,
+              aiSummary: true,
+              progressiveSummary: true,
+              conservativeSummary: true,
+              createdAt: true,
+            },
+          });
 
-    /* =========================
-     * 2) 아젠다 검색 (Agenda)
-     *   - 제목/내용 LIKE NOCASE (raw)
-     *   - 태그 json_each LIKE NOCASE (raw)
-     * ========================= */
-    const agendasPromise: Promise<AgendaDTO[] | []> =
-      scope !== "media"
-        ? (async () => {
-            // 2-1. 제목/내용
-            const textRows = await prisma.$queryRaw<IdRow[]>`
-              SELECT a.id
-              FROM Agenda a
-              WHERE (a.title   LIKE '%' || ${q} || '%' COLLATE NOCASE)
-                 OR (a.content LIKE '%' || ${q} || '%' COLLATE NOCASE)
-            `;
+    /* ────────────────────────────────
+     * 3) 유저 아젠다 검색 (Agenda)
+     * ──────────────────────────────── */
+    const agendasPromise =
+      scope === "media"
+        ? Promise.resolve([] as any[])
+        : prisma.agenda.findMany({
+            where: {
+              OR: [
+                { title: { contains: q, mode: "insensitive" } },
+                { content: { contains: q, mode: "insensitive" } },
+              ],
+            },
+            orderBy: { createdAt: "desc" },
+            take: 30,
+            select: {
+              id: true,
+              title: true,
+              content: true,
+              tags: true,
+              createdAt: true,
+              likesCount: true,
+              commentCount: true,
+            },
+          });
 
-            // 2-2. 태그
-            const tagRows = await prisma.$queryRaw<IdRow[]>`
-              SELECT DISTINCT a.id
-              FROM Agenda AS a, json_each(a.tags) AS t
-              WHERE CAST(t.value AS TEXT) LIKE '%' || ${q} || '%' COLLATE NOCASE
-            `;
-
-            const idSet = new Set<string>([
-              ...textRows.map(r => r.id),
-              ...tagRows.map(r => r.id),
-            ]);
-            if (idSet.size === 0) return [];
-
-            const agendas = await prisma.agenda.findMany({
-              where: { id: { in: Array.from(idSet) } },
-              orderBy: { createdAt: "desc" },
-              take: 30,
-              select: {
-                id: true,
-                title: true,
-                content: true,
-                tags: true,
-                createdAt: true,
-                likesCount: true,
-                commentCount: true,
+    /* ────────────────────────────────
+     * 4) 커뮤니티 글 검색 (CommunityPost)
+     *    → 프론트의 CommunityPostSummary 타입에 맞게 변환
+     * ──────────────────────────────── */
+    const communityPostsPromise =
+      scope === "media"
+        ? Promise.resolve([] as any[])
+        : prisma.communityPost.findMany({
+            where: {
+              OR: [
+                { title: { contains: q, mode: "insensitive" } },
+                { content: { contains: q, mode: "insensitive" } },
+              ],
+            },
+            orderBy: { createdAt: "desc" },
+            take: 30,
+            select: {
+              id: true,
+              title: true,
+              content: true,
+              createdAt: true,
+              lounge: true,
+              isHot: true,
+              thumbnail: true,
+              likesCount: true,
+              commentCount: true,
+              viewsCount: true,
+              user: {
+                select: {
+                  username: true,
+                  nickname: true,
+                  ctiType: true,
+                },
               },
-            });
+            },
+          });
 
-            return agendas as AgendaDTO[];
-          })()
-        : Promise.resolve([]);
+    const [issues, clipIssues, agendas, communityPostsRaw] =
+      await Promise.all([
+        issuesPromise,
+        clipIssuesPromise,
+        agendasPromise,
+        communityPostsPromise,
+      ]);
 
-    const [issues, agendas] = await Promise.all([issuesPromise, agendasPromise]);
-    return res.json({ issues, agendas });
+    // 🔹 CommunityPost → CommunityPostSummary 형태로 매핑
+    const communityPosts = (communityPostsRaw as any[]).map((p) => ({
+      id: p.id,
+      title: p.title,
+      contentPreview:
+        (p.content ?? "").length > 120
+          ? `${p.content.slice(0, 120)}...`
+          : p.content ?? "",
+      author: p.user?.nickname ?? p.user?.username ?? "익명",
+      authorCTI: p.user?.ctiType ?? null,
+      likes: p.likesCount,
+      comments: p.commentCount,
+      views: p.viewsCount,
+      createdAt: p.createdAt,
+      lounge: p.lounge,
+      isHot: p.isHot,
+      thumbnail: p.thumbnail,
+    }));
+
+    return res.json({
+      issues,
+      clipIssues,
+      agendas,
+      communityPosts,
+    });
   } catch (e) {
-    console.error("[/api/search] error:", e);
-    // UX 보존: 에러 시에도 빈 결과 반환
-    return res.json({ issues: [] as IssueDTO[], agendas: [] as AgendaDTO[] });
+    console.error("[GET /api/search] error:", e);
+    return res.json({
+      issues: [] as any[],
+      clipIssues: [] as any[],
+      agendas: [] as any[],
+      communityPosts: [] as any[],
+    });
   }
 });
 
