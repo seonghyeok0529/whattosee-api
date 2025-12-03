@@ -30,7 +30,9 @@
     "node-cron": "^4.2.1",
     "openai": "^6.8.1",
     "rss-parser": "^3.13.0",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+
+    "@types/node": "^24.10.0"          ← 🔹 이 줄을 dependencies 쪽으로 이동
   },
   "devDependencies": {
     "@types/axios": "^0.9.36",
@@ -41,7 +43,6 @@
     "@types/jsonwebtoken": "^9.0.10",
     "@types/morgan": "^1.9.10",
     "@types/natural": "^5.1.5",
-    "@types/node": "^24.10.0",
     "@types/node-cron": "^3.0.11",
     "prisma": "^6.18.0",
     "ts-node-dev": "^2.0.0",
