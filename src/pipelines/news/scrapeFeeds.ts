@@ -1,3 +1,5 @@
+// src/pipelines/news/scrapeFeeds.ts (예시 경로)
+
 import Parser from "rss-parser";
 import type { RawArticleLite, SourceSide } from "./types.js";
 import fs from "fs";
@@ -9,10 +11,20 @@ const parser = new Parser({
   timeout: Number(process.env.NEWS_TIMEOUT_MS ?? 12000),
 });
 
-/** env JSON 파싱 + 검증 (파일 우선) */
+/**
+ * env JSON 파싱 + 검증 (파일 우선)
+ *
+ * - NEWS_FEEDS_FILE 경로가 있으면 파일 읽기
+ * - 없으면 NEWS_FEEDS 환경변수에서 직접 읽기
+ * - JSON 형태 지원:
+ *    1) [ { outlet, url, side }, ... ]          ← 배열
+ *    2) { "sources": [ ... ] }
+ *    3) { "feeds": [ ... ] }
+ */
 function loadFeeds(): FeedConf[] {
   const path = process.env.NEWS_FEEDS_FILE?.trim();
   let raw = "";
+
   if (path && fs.existsSync(path)) {
     raw = fs.readFileSync(path, "utf8");
   } else {
@@ -22,13 +34,29 @@ function loadFeeds(): FeedConf[] {
   if (!raw) return [];
 
   try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr)) return [];
+    const parsed = JSON.parse(raw);
+
+    // ✅ 1) 최상단이 배열인 경우
+    // ✅ 2) { sources: [...] } 형태
+    // ✅ 3) { feeds: [...] } 형태
+    const arr: any[] =
+      Array.isArray(parsed)
+        ? parsed
+        : Array.isArray((parsed as any).sources)
+        ? (parsed as any).sources
+        : Array.isArray((parsed as any).feeds)
+        ? (parsed as any).feeds
+        : [];
+
+    if (!arr.length) return [];
+
     return arr
-      .map((x) => ({
+      .map((x: any) => ({
         outlet: String(x.outlet ?? ""),
         url: String(x.url ?? ""),
-        side: (["left", "center", "right", "neutral"] as const).includes(x.side)
+        side: (["left", "center", "right", "neutral"] as const).includes(
+          x.side,
+        )
           ? (x.side as SourceSide)
           : "center",
       }))
@@ -54,7 +82,15 @@ function normalizeUrl(u: string): string {
 
     // 추적 파라미터 제거
     const params = url.searchParams;
-    const removePrefixes = ["utm_", "spm", "fbclid", "gclid", "igshid", "ref", "sr_share"];
+    const removePrefixes = [
+      "utm_",
+      "spm",
+      "fbclid",
+      "gclid",
+      "igshid",
+      "ref",
+      "sr_share",
+    ];
     const removeExact = new Set([
       "utm_source",
       "utm_medium",
@@ -96,6 +132,11 @@ function normalizeUrl(u: string): string {
 export async function scrapeFeeds(): Promise<RawArticleLite[]> {
   const feeds = loadFeeds();
 
+  if (!feeds.length) {
+    console.warn("[scrapeFeeds] no feeds loaded (check NEWS_FEEDS / NEWS_FEEDS_FILE)");
+    return [];
+  }
+
   // 기본 50개/피드, 전체 cap은 설정 없으면 (피드 수 * perFeed)로
   const perFeed = Math.min(Number(process.env.NEWS_MAX_PER_FEED ?? 50), 200);
   const configuredCap = Number(process.env.NEWS_MAX_ARTICLES ?? 0);
@@ -118,7 +159,9 @@ export async function scrapeFeeds(): Promise<RawArticleLite[]> {
         .map((it) => {
           const link = (it.link || it.guid || "").trim();
           const title = String(it.title ?? "").trim();
-          const publishedAt = toDate((it as any).isoDate ?? (it as any).pubDate ?? new Date());
+          const publishedAt = toDate(
+            (it as any).isoDate ?? (it as any).pubDate ?? new Date(),
+          );
 
           const a: RawArticleLite = {
             url: link,
@@ -130,7 +173,10 @@ export async function scrapeFeeds(): Promise<RawArticleLite[]> {
           return a;
         })
         .filter((a) => /^https?:\/\//i.test(a.url))
-        .sort((a, b) => (b.publishedAt!.getTime()) - (a.publishedAt!.getTime()))
+        .sort(
+          (a, b) =>
+            (b.publishedAt!.getTime()) - (a.publishedAt!.getTime()),
+        )
         .slice(0, perFeed);
 
       perFeedBuckets.push(items);
