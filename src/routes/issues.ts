@@ -13,21 +13,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-/** 주요 언론 화이트리스트(원하는 대로 추가/수정) */
-const MAJOR_OUTLETS = new Set<string>([
-  "연합뉴스",
-  "한겨레",
-  "경향신문",
-  "오마이뉴스",
-  "조선일보",
-  "중앙일보",
-  "동아일보",
-  "JTBC",
-  "KBS",
-  "MBC",
-  "SBS",
-]);
-
 type SimpleSource = {
   outlet: string;
   side: SourceSide;
@@ -40,6 +25,9 @@ type SimplePerson = {
   role: string | null;
 };
 
+//
+// 🔥 리스트에서 사용하는 타입 확장: 여러 언론사
+//
 type IssueListItem = {
   id: string;
   title: string;
@@ -50,28 +38,26 @@ type IssueListItem = {
   rightSources: string[];
   firstSource?: string;
   thumbnailUrl: string | null;
+
+  /** 추가됨: 전체 언론사 목록 */
+  sourceOutlets: string[];
 };
 
 /** 유니크 보장 + 정렬 + 상한 */
-function uniqueTop(
-  items: SimpleSource[],
-  side: SourceSide,
-  limit: number
-): string[] {
+function uniqueTop(items: SimpleSource[], side: SourceSide, limit: number) {
   const seen = new Set<string>();
   const picked: string[] = [];
 
   items
-    .filter((s: SimpleSource) => s.side === side)
+    .filter((s) => s.side === side)
     .sort(
-      (a: SimpleSource, b: SimpleSource) =>
-        (b.createdAt?.getTime() ?? 0) - (a.createdAt?.getTime() ?? 0)
+      (a, b) =>
+        (b.createdAt?.getTime() ?? 0) -
+        (a.createdAt?.getTime() ?? 0)
     )
-    .forEach((s: SimpleSource) => {
+    .forEach((s) => {
       const name = s.outlet?.trim();
       if (!name) return;
-      // “주요 언론만” 보여주려면 MAJOR_OUTLETS 체크 추가 가능
-      // if (!MAJOR_OUTLETS.has(name)) return;
       if (!seen.has(name)) {
         seen.add(name);
         picked.push(name);
@@ -81,23 +67,23 @@ function uniqueTop(
   return picked.slice(0, limit);
 }
 
-/** 최초 보도(가장 이른 createdAt)한 언론 */
+/** 최초 보도(가장 이른 createdAt) */
 function firstSourceName(items: { outlet: string; createdAt?: Date | null }[]) {
   if (!items.length) return undefined;
 
-  const sorted = items
+  return items
     .filter((x) => !!x.outlet)
     .sort(
-      (
-        a: { outlet: string; createdAt?: Date | null },
-        b: { outlet: string; createdAt?: Date | null }
-      ) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0)
-    );
-
-  return sorted[0]?.outlet;
+      (a, b) =>
+        (a.createdAt?.getTime() ?? 0) -
+        (b.createdAt?.getTime() ?? 0)
+    )[0]?.outlet;
 }
 
-/** Issue + sources → 리스트에서 쓰는 공통 형태로 변환 */
+/**
+ * Issue + sources → 리스트에 맞는 형태로 변환
+ * 🔥 sourceOutlets(언론사 전체 목록) 추가됨
+ */
 function toIssueListItem(
   i: {
     id: string;
@@ -113,15 +99,33 @@ function toIssueListItem(
   const leftSources = uniqueTop(srcs, "left", 4);
   const rightSources = uniqueTop(srcs, "right", 4);
   const firstSource = firstSourceName(srcs);
+
   const latest = srcs
-    .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
-    .reduce((a: number, b: number) => Math.max(a, b), 0);
+    .map((s) => s.createdAt?.getTime() ?? 0)
+    .reduce((a, b) => Math.max(a, b), 0);
+
+  // 🔥 전체 언론사 목록(최신순 + 유니크)
+  const outletSet = new Set<string>();
+  srcs
+    .slice()
+    .sort(
+      (a, b) =>
+        (b.createdAt?.getTime() ?? 0) -
+        (a.createdAt?.getTime() ?? 0)
+    )
+    .forEach((s) => {
+      const name = s.outlet?.trim();
+      if (!name) return;
+      outletSet.add(name);
+    });
+
+  const sourceOutlets = Array.from(outletSet);
 
   return {
     id: i.id,
     title: i.title,
     summary: i.summary ?? "",
-    tags: Array.isArray(i.tags) ? (i.tags as string[]) : [],
+    tags: Array.isArray(i.tags) ? i.tags : [],
     updatedAt: latest
       ? new Date(latest).toISOString()
       : i.updatedAt.toISOString(),
@@ -129,25 +133,28 @@ function toIssueListItem(
     rightSources,
     firstSource,
     thumbnailUrl: i.thumbnailUrl ?? null,
+
+    // 🔥 리스트 UI에서 썸네일 대체로 사용할 언론사 배열
+    sourceOutlets,
   };
 }
 
 /**
  * GET /api/issues/top-today
- * 오늘의 TOP 이슈 (서버 랭킹)
- * ※ /:id 보다 위에 둬야 라우팅이 안 잡아먹힘
+ * 오늘의 TOP 이슈 목록
  */
 issuesRouter.get("/top-today", async (_req, res) => {
   try {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
+
     const end = new Date();
     end.setHours(23, 59, 59, 999);
 
     const raw = await prisma.issue.findMany({
       where: {
         createdAt: { gte: start, lte: end },
-        status: IssueStatus.PUBLISHED, // ✅ 공개 이슈만
+        status: IssueStatus.PUBLISHED,
       },
       select: {
         id: true,
@@ -156,7 +163,7 @@ issuesRouter.get("/top-today", async (_req, res) => {
         tags: true,
         createdAt: true,
         updatedAt: true,
-        thumbnailUrl: true, // 🔹 썸네일 필드
+        thumbnailUrl: true,
         sources: {
           select: {
             outlet: true,
@@ -170,7 +177,6 @@ issuesRouter.get("/top-today", async (_req, res) => {
     const scored = raw.map((i) => {
       const srcs = i.sources as SimpleSource[];
 
-      // 공통 리스트 형태로 변환
       const base = toIssueListItem(
         {
           id: i.id,
@@ -184,16 +190,15 @@ issuesRouter.get("/top-today", async (_req, res) => {
         srcs
       );
 
-      // 기존 점수 계산 로직 유지
       const total = srcs.length;
       const left = srcs.filter((s) => s.side === "left").length;
       const right = srcs.filter((s) => s.side === "right").length;
+
       const diversity = (left > 0 ? 1 : 0) + (right > 0 ? 1 : 0);
-      const score = total + diversity * 1.5;
 
       return {
         ...base,
-        score,
+        score: total + diversity * 1.5,
       };
     });
 
@@ -207,17 +212,15 @@ issuesRouter.get("/top-today", async (_req, res) => {
 });
 
 /**
- * GET /api/issues?cursor=uuid&take=20
- * 리스트: 공개(PUBLISHED) 이슈만
+ * GET /api/issues
+ * 전체 이슈 리스트 (커서 기반)
  */
 issuesRouter.get("/", async (req, res) => {
-  const take = Math.min(Number(req.query.take ?? 50), 1000);
+  const take = Math.min(Number(req.query.take ?? 50), 100);
   const cursor = req.query.cursor as string | undefined;
 
   const raw = await prisma.issue.findMany({
-    where: {
-      status: IssueStatus.PUBLISHED, // ✅ 공개 이슈만
-    },
+    where: { status: IssueStatus.PUBLISHED },
     orderBy: { createdAt: "desc" },
     take: take + 1,
     ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
@@ -228,7 +231,7 @@ issuesRouter.get("/", async (req, res) => {
       tags: true,
       createdAt: true,
       updatedAt: true,
-      thumbnailUrl: true, // 🔹 썸네일 필드
+      thumbnailUrl: true,
       sources: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -240,7 +243,7 @@ issuesRouter.get("/", async (req, res) => {
     },
   });
 
-  const items: IssueListItem[] = raw.map((i) =>
+  const items = raw.map((i) =>
     toIssueListItem(
       {
         id: i.id,
@@ -264,13 +267,13 @@ issuesRouter.get("/", async (req, res) => {
 
 /**
  * GET /api/issues/:id
- * 상세: 공개(PUBLISHED) 이슈만
+ * 상세 페이지
  */
 issuesRouter.get("/:id", async (req, res) => {
   const issue = await prisma.issue.findFirst({
     where: {
       id: req.params.id,
-      status: IssueStatus.PUBLISHED, // ✅ 비공개 이슈는 404
+      status: IssueStatus.PUBLISHED,
     },
     select: {
       id: true,
@@ -282,7 +285,7 @@ issuesRouter.get("/:id", async (req, res) => {
       createdAt: true,
       updatedAt: true,
       body: true,
-      thumbnailUrl: true, // 🔹 상세에서도 썸네일 제공
+      thumbnailUrl: true,
       sources: {
         orderBy: { createdAt: "asc" },
         select: {
@@ -294,9 +297,7 @@ issuesRouter.get("/:id", async (req, res) => {
           createdAt: true,
         },
       },
-      persons: {
-        select: { id: true, name: true, role: true },
-      },
+      persons: { select: { id: true, name: true, role: true } },
       relatedFrom: {
         include: {
           to: {
@@ -333,12 +334,9 @@ issuesRouter.get("/:id", async (req, res) => {
   const rawSrcs = issue.sources as any[];
   const persons = issue.persons as SimplePerson[];
 
-  // 🔥 1) 이 이슈의 기사 URL 목록
-  const urls = rawSrcs
-    .map((s) => s.url as string | null)
-    .filter((u): u is string => !!u);
+  const urls = rawSrcs.map((s) => s.url).filter(Boolean);
 
-  // 🔥 2) RawArticle 에서 썸네일 + 발행 시각 매핑
+  // RawArticle 매핑
   const thumbMap = new Map<string, string | null>();
   const publishedMap = new Map<string, string | null>();
 
@@ -347,6 +345,7 @@ issuesRouter.get("/:id", async (req, res) => {
       where: { url: { in: urls } },
       select: { url: true, thumbnail: true, publishedAt: true },
     });
+
     for (const r of raws) {
       thumbMap.set(r.url, r.thumbnail ?? null);
       publishedMap.set(
@@ -356,7 +355,7 @@ issuesRouter.get("/:id", async (req, res) => {
     }
   }
 
-  // left/right 소스 계산용 SimpleSource
+  // left/right 계산
   const simpleSrcs: SimpleSource[] = rawSrcs.map((s) => ({
     outlet: s.outlet,
     side: s.side,
@@ -366,46 +365,57 @@ issuesRouter.get("/:id", async (req, res) => {
   const leftSources = uniqueTop(simpleSrcs, "left", 6);
   const rightSources = uniqueTop(simpleSrcs, "right", 6);
   const firstSource = firstSourceName(simpleSrcs);
-  const latest = simpleSrcs
-    .map((s: SimpleSource) => s.createdAt?.getTime() ?? 0)
-    .reduce((a: number, b: number) => Math.max(a, b), 0);
 
+  const latest = simpleSrcs
+    .map((s) => s.createdAt?.getTime() ?? 0)
+    .reduce((a, b) => Math.max(a, b));
+
+  // 🔥 전체 언론사 목록 (상세에서도 제공)
+  const outletSet = new Set<string>();
+  simpleSrcs
+    .slice()
+    .sort(
+      (a, b) =>
+        (b.createdAt?.getTime() ?? 0) -
+        (a.createdAt?.getTime() ?? 0)
+    )
+    .forEach((s) => {
+      const name = s.outlet?.trim();
+      if (name) outletSet.add(name);
+    });
+  const sourceOutlets = Array.from(outletSet);
+
+  // 관련 이슈
   const relatedMap = new Map<string, any>();
 
-  // 내가 FROM(상위/원 이슈) → 상대가 TO
   for (const r of (issue as any).relatedFrom ?? []) {
     const other = r.to;
     if (!other) continue;
     if (other.status !== IssueStatus.PUBLISHED) continue;
 
-    if (!relatedMap.has(other.id)) {
-      relatedMap.set(other.id, {
-        id: other.id,
-        title: other.title,
-        summary: other.summary ?? "",
-        thumbnailUrl: other.thumbnailUrl ?? null,
-        direction: "from" as const, // 이 이슈에서 출발해서 이어지는(파생) 느낌
-        updatedAt: other.updatedAt?.toISOString?.() ?? null,
-      });
-    }
+    relatedMap.set(other.id, {
+      id: other.id,
+      title: other.title,
+      summary: other.summary ?? "",
+      thumbnailUrl: other.thumbnailUrl ?? null,
+      direction: "from",
+      updatedAt: other.updatedAt?.toISOString?.() ?? null,
+    });
   }
 
-  // 내가 TO(파생/후속 이슈) ← 상대가 FROM
   for (const r of (issue as any).relatedTo ?? []) {
     const other = r.from;
     if (!other) continue;
     if (other.status !== IssueStatus.PUBLISHED) continue;
 
-    if (!relatedMap.has(other.id)) {
-      relatedMap.set(other.id, {
-        id: other.id,
-        title: other.title,
-        summary: other.summary ?? "",
-        thumbnailUrl: other.thumbnailUrl ?? null,
-        direction: "to" as const, // 이 이슈로 이어지는 상위/원 이슈 느낌
-        updatedAt: other.updatedAt?.toISOString?.() ?? null,
-      });
-    }
+    relatedMap.set(other.id, {
+      id: other.id,
+      title: other.title,
+      summary: other.summary ?? "",
+      thumbnailUrl: other.thumbnailUrl ?? null,
+      direction: "to",
+      updatedAt: other.updatedAt?.toISOString?.() ?? null,
+    });
   }
 
   const relatedIssues = Array.from(relatedMap.values());
@@ -417,40 +427,36 @@ issuesRouter.get("/:id", async (req, res) => {
       summary: issue.summary ?? "",
       leftSummary: issue.leftSummary ?? "",
       rightSummary: issue.rightSummary ?? "",
-      tags: Array.isArray(issue.tags) ? (issue.tags as string[]) : [],
+      tags: Array.isArray(issue.tags) ? issue.tags : [],
       body: issue.body ?? "",
       updatedAt: latest
         ? new Date(latest).toISOString()
         : issue.updatedAt.toISOString(),
+
       leftSources,
       rightSources,
       firstSource,
-      thumbnailUrl: issue.thumbnailUrl ?? null, // 🔹 상세 상단 이미지용
-      // 🔥 3) 기사 리스트용 소스 + 썸네일/발행일 포함
-      sources: rawSrcs.map((s) => {
-        const thumb = thumbMap.get(s.url) ?? null;
-        const publishedAt = publishedMap.get(s.url) ?? null;
-        return {
-          id: s.id,
-          outlet: s.outlet,
-          title: s.title,
-          url: s.url,
-          side: s.side,
-          createdAt: s.createdAt
-            ? (s.createdAt instanceof Date
-                ? s.createdAt.toISOString()
-                : s.createdAt)
-            : null,
-          publishedAt, // ⬅️ 추가
-          thumbnail: thumb,
-          thumbnailUrl: thumb,
-        };
-      }),
+      thumbnailUrl: issue.thumbnailUrl,
+      sourceOutlets, // 🔥 추가됨
+
+      sources: rawSrcs.map((s) => ({
+        id: s.id,
+        outlet: s.outlet,
+        title: s.title,
+        url: s.url,
+        side: s.side,
+        createdAt: s.createdAt?.toISOString?.() ?? null,
+        publishedAt: publishedMap.get(s.url) ?? null,
+        thumbnail: thumbMap.get(s.url) ?? null,
+        thumbnailUrl: thumbMap.get(s.url) ?? null,
+      })),
+
       persons: persons.map((p) => ({
         id: p.id,
         name: p.name,
         role: p.role,
       })),
+
       relatedIssues,
     },
   });
