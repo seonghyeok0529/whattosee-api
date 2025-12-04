@@ -338,15 +338,21 @@ issuesRouter.get("/:id", async (req, res) => {
     .map((s) => s.url as string | null)
     .filter((u): u is string => !!u);
 
-  // 🔥 2) RawArticle 에서 썸네일 매핑
+  // 🔥 2) RawArticle 에서 썸네일 + 발행 시각 매핑
   const thumbMap = new Map<string, string | null>();
+  const publishedMap = new Map<string, string | null>();
+
   if (urls.length > 0) {
     const raws = await prisma.rawArticle.findMany({
       where: { url: { in: urls } },
-      select: { url: true, thumbnail: true },
+      select: { url: true, thumbnail: true, publishedAt: true },
     });
     for (const r of raws) {
       thumbMap.set(r.url, r.thumbnail ?? null);
+      publishedMap.set(
+        r.url,
+        r.publishedAt ? r.publishedAt.toISOString() : null
+      );
     }
   }
 
@@ -420,9 +426,10 @@ issuesRouter.get("/:id", async (req, res) => {
       rightSources,
       firstSource,
       thumbnailUrl: issue.thumbnailUrl ?? null, // 🔹 상세 상단 이미지용
-      // 🔥 3) 기사 리스트용 소스 + 썸네일/작성일 포함
+      // 🔥 3) 기사 리스트용 소스 + 썸네일/발행일 포함
       sources: rawSrcs.map((s) => {
         const thumb = thumbMap.get(s.url) ?? null;
+        const publishedAt = publishedMap.get(s.url) ?? null;
         return {
           id: s.id,
           outlet: s.outlet,
@@ -434,6 +441,7 @@ issuesRouter.get("/:id", async (req, res) => {
                 ? s.createdAt.toISOString()
                 : s.createdAt)
             : null,
+          publishedAt, // ⬅️ 추가
           thumbnail: thumb,
           thumbnailUrl: thumb,
         };
