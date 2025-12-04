@@ -65,8 +65,8 @@ ${titles}
 
 /* -------------------------------------------------------
  * 2) 중립 AI Summary 생성 → ClipIssue.aiSummary 저장
- *  - 클립 제목/채널/성향(메타 정보) 기반 이슈 요약
- *  - 실제 영상 내용/자막/본문은 생성에 사용하지 않음
+ *  - 생성: 제목/채널/성향(메타)만 사용
+ *  - 검증: 원본(description 등)을 이용해 큰 오류만 체크
  * ----------------------------------------------------- */
 export async function generateClipIssueSummary(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
@@ -81,6 +81,7 @@ export async function generateClipIssueSummary(clipIssueId: string) {
 
   if (!issue) throw new Error("CLIP_ISSUE_NOT_FOUND");
 
+  // 2-1) 메타 정보 기반 요약 생성
   const clipLines = issue.clips
     .map((c, i) => {
       const r = c.rawClip;
@@ -104,7 +105,7 @@ export async function generateClipIssueSummary(clipIssueId: string) {
 
   const clippedList = take(clipLines, 3500);
 
-  const prompt = `
+  const summaryPrompt = `
 다음은 여러 방송/유튜브 뉴스 클립을 묶은 '뉴스 클립 이슈'이다.
 제목과 채널, 성향 정보를 단서로 이 이슈의 전체 맥락을 2~3문장으로 중립적으로 요약해라.
 
@@ -137,11 +138,65 @@ ${clippedList}
         content:
           "너는 정치·사회 이슈를 중립적으로 요약하는 보조자다. 입력 텍스트의 문장을 그대로 베끼지 말고 항상 새로운 문장으로 작성해야 한다.",
       },
-      { role: "user", content: prompt },
+      { role: "user", content: summaryPrompt },
     ],
   });
 
-  const summary = res.choices?.[0]?.message?.content?.trim() ?? "";
+  let summary = res.choices?.[0]?.message?.content?.trim() ?? "";
+
+  // 2-2) 원본 데이터(설명 등)로 요약 검증 (선택적)
+  const descriptionBlock = take(issue.description, 2000);
+
+  if (descriptionBlock && summary) {
+    const validatePrompt = `
+다음은 뉴스 클립 이슈에 대해 AI가 생성한 요약문이다:
+
+[요약문]
+${summary}
+
+아래는 이 이슈를 설명하기 위해 수집된 참고 설명 텍스트이다
+(여러 클립 설명을 합친 것일 수 있음):
+
+[설명 텍스트 일부]
+${descriptionBlock}
+
+너의 역할:
+- 요약문이 설명 텍스트의 핵심과 크게 모순되지 않는지 검증한다.
+- 설명 텍스트의 문장을 그대로 베끼지 말 것.
+- 설명 텍스트를 새로 요약하려고 하지 말고, '현재 요약문'이 틀린 부분만 잡아서 수정하는 데 집중할 것.
+
+출력 형식:
+1) 첫 줄에 아래 중 하나만 적을 것: "정확함" / "부분 오류" / "심각한 오류"
+2) 둘째 줄부터, 필요하다면 수정된 요약문을 2~3문장으로 새로 작성한다.
+   - 이때도 설명 텍스트의 표현을 그대로 베끼지 말 것.
+    `.trim();
+
+    const v = await openai.chat.completions.create({
+      model: DEFAULT_MODEL,
+      temperature: 0.2,
+      messages: [
+        {
+          role: "system",
+          content:
+            "너는 요약문의 정확성을 검증하는 보조자다. 기사나 자막의 문장을 그대로 재작성하지 않는다.",
+        },
+        { role: "user", content: validatePrompt },
+      ],
+    });
+
+    const validated = v.choices?.[0]?.message?.content?.trim();
+    if (validated) {
+      const [firstLine, ...rest] = validated.split("\n");
+      const verdict = firstLine.trim();
+      const maybeNewSummary = rest.join("\n").trim();
+      if (
+        (verdict === "부분 오류" || verdict === "심각한 오류") &&
+        maybeNewSummary.length > 0
+      ) {
+        summary = maybeNewSummary;
+      }
+    }
+  }
 
   await prisma.clipIssue.update({
     where: { id: clipIssueId },
@@ -154,10 +209,96 @@ ${clippedList}
 }
 
 /* -------------------------------------------------------
- * 3) 진보 / 보수 프레임 요약
- *  - 특정 클립 '내용' 요약이 아니라, 성향별 전형적 관점/프레임 설명
- *  - 제목/채널 목록만 사용
- *  - 최소 2개 이상 클립 있을 때만 생성 (1개면 스킵)
+ * 3) 쟁점 리스트 생성 → ClipIssue.talkingPoints 저장
+ *  - 요약 + 메타를 바탕으로, 시청 전에 보면 좋은 쟁점/질문 리스트
+ *  - 원본 내용 “대신 읽어주는 것”이 아니라, “볼 때 뭘 볼지”를 정리
+ * ----------------------------------------------------- */
+export async function generateClipIssueTalkingPoints(clipIssueId: string) {
+  const issue = await prisma.clipIssue.findUnique({
+    where: { id: clipIssueId },
+    include: {
+      clips: {
+        include: { rawClip: true },
+        take: 12,
+      },
+    },
+  });
+
+  if (!issue) throw new Error("CLIP_ISSUE_NOT_FOUND");
+  if (!issue.aiSummary) return "";
+
+  const clipLines = issue.clips
+    .map((c, i) => {
+      const r = c.rawClip;
+      if (!r) return "";
+      const side =
+        r.side === "left"
+          ? "(진보)"
+          : r.side === "right"
+          ? "(보수)"
+          : r.side === "center"
+          ? "(중도)"
+          : "(중립)";
+      const channel = r.channel ?? "채널";
+      const title = r.title ?? "(제목 없음)";
+      return `- [${i + 1}] ${channel} ${side}: ${title}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+
+  const prompt = `
+다음은 한 이슈에 대한 AI 요약문과 관련 뉴스 클립 목록이다.
+이 정보를 바탕으로, 사용자가 '원본 영상을 볼 때 특히 주목하면 좋을 쟁점/질문 리스트'를 만들어라.
+
+[이슈 요약문]
+${issue.aiSummary}
+
+[관련 클립 목록]
+${clipLines}
+
+요구사항:
+- 쟁점 리스트는 3~7개 bullet로 작성
+- 각 항목은 1문장 이내로, "어떤 논점/갈등/질문"에 주목해야 하는지 알려줄 것
+- 원본 영상 내용을 대신 요약하려 하지 말 것
+- '무엇이 쟁점인지'와 '무엇을 비교/비판적으로 생각해야 하는지'에 초점을 둘 것
+- 문장 끝에 마침표는 생략해도 된다
+
+출력 형식:
+- 마크다운 bullet 리스트 형태 (- 로 시작)
+  `.trim();
+
+  const res = await openai.chat.completions.create({
+    model: DEFAULT_MODEL,
+    temperature: 0.4,
+    messages: [
+      {
+        role: "system",
+        content:
+          "너는 시청자가 뉴스를 볼 때 중요한 쟁점과 질문을 짚어주는 가이드다. 원본 내용을 대신 요약하지 말고, 생각할 포인트를 제시한다.",
+      },
+      { role: "user", content: prompt },
+    ],
+  });
+
+  const talkingPoints = res.choices?.[0]?.message?.content?.trim() ?? "";
+
+  if (!talkingPoints) return "";
+
+  await prisma.clipIssue.update({
+    where: { id: clipIssueId },
+    data: {
+      // @ts-ignore: ClipIssue 모델에 talkingPoints 필드 있다고 가정
+      talkingPoints,
+    },
+  });
+
+  return talkingPoints;
+}
+
+/* -------------------------------------------------------
+ * 4) 좌/우 프레임 요약 (선택 유지)
+ *  - "내용 요약"이 아니라, 성향별 전형적 관점/프레임 설명
+ *  - 클립 2개 이상 있을 때만 생성
  * ----------------------------------------------------- */
 export async function generateClipIssueSideSummary(
   clipIssueId: string,
@@ -170,7 +311,6 @@ export async function generateClipIssueSideSummary(
   });
 
   if (clips.length < 2) {
-    // 한 개만 있을 때는 특정 클립 요약처럼 보일 수 있으므로 생성하지 않음
     return "";
   }
 
@@ -224,7 +364,7 @@ ${clippedList}
 }
 
 /* -------------------------------------------------------
- * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText)
+ * 5) ClipIssue 전체 AI 필드 재생성 (+ glossaryText + talkingPoints)
  * ----------------------------------------------------- */
 export async function refreshClipIssueAIFields(clipIssueId: string) {
   // 제목 / 요약 / 좌·우 프레임 요약 병렬 생성
@@ -252,7 +392,10 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     },
   });
 
-  // glossary용 클립 목록 텍스트 구성 (설명용이므로 메타 정보 위주)
+  // 쟁점 리스트 생성 (aiSummary를 활용)
+  const talkingPoints = await generateClipIssueTalkingPoints(clipIssueId);
+
+  // glossary용 클립 목록 텍스트 구성
   const clipsText = updatedBase.clips
     .map((ic) => {
       const ch = ic.rawClip?.channel ?? "채널";
@@ -263,26 +406,28 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
 
   const glossaryText = await generateGlossaryText({
     title: updatedBase.title,
-    // aiSummary가 있으면 우선 사용, 없으면 description 사용 (description은 운영 정책에 따라 관리)
     summary: updatedBase.aiSummary ?? updatedBase.description ?? null,
     itemsText: clipsText,
     locale: "ko",
     sourceType: "clip",
   });
 
-  // glossaryText만 별도 업데이트
-  await prisma.clipIssue.update({
+  // glossaryText / talkingPoints 반영
+  const final = await prisma.clipIssue.update({
     where: { id: clipIssueId },
     data: {
-      // @ts-ignore: ClipIssue 모델에 glossaryText 필드 있다고 가정
+      // @ts-ignore
       glossaryText,
+      // @ts-ignore
+      talkingPoints: talkingPoints || null,
     },
   });
 
-  // 라우터에서 (updated as any).glossaryText 로 접근 가능하도록 합쳐서 반환
   return {
-    ...updatedBase,
+    ...final,
     // @ts-ignore
     glossaryText,
+    // @ts-ignore
+    talkingPoints,
   } as any;
 }
