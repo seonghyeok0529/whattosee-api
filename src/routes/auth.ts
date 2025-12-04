@@ -259,6 +259,7 @@ router.get("/me", async (req, res) => {
       token,
       process.env.JWT_ACCESS_SECRET!
     ) as { sub: string };
+
     const user = await prisma.user.findUnique({
       where: { id: payload.sub },
       select: {
@@ -268,13 +269,24 @@ router.get("/me", async (req, res) => {
         nickname: true,
         createdAt: true,
         role: true,
+        // 🔹 온보딩/동의 관련
+        tosAgreedAt: true,
+        privacyAgreedAt: true,
+        marketingAgreed: true,
+        // 🔹 CTI 관련
+        ctiType: true,
+        ctiScores: true,
+        // (선택) 온보딩 완료 시각 필드를 만들었다면
+        // onboardedAt: true,
       },
     });
     if (!user) return res.status(401).json({ error: "Unauthorized" });
+
     const allowList = (process.env.ADMIN_EMAILS ?? "")
       .split(",")
       .map((s) => s.trim().toLowerCase())
       .filter(Boolean);
+
     const isAdmin =
       user.role === "admin" ||
       (user.email ? allowList.includes(user.email.toLowerCase()) : false);
@@ -284,12 +296,15 @@ router.get("/me", async (req, res) => {
         ...user,
         isAdmin,
         role: user.role,
+        // 🔹 프론트 타입 이름과 맞춰주고 싶으면 여기서 키 바꿔서 내려줄 수도 있음
+        marketingOptIn: user.marketingAgreed ?? false,
       },
     });
   } catch {
     return res.status(401).json({ error: "Unauthorized" });
   }
 });
+
 
 /* Google 콜백 ==================== */
 router.get("/google/callback", async (req, res) => {
