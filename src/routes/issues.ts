@@ -268,6 +268,7 @@ issuesRouter.get("/", async (req, res) => {
 /**
  * GET /api/issues/:id
  * 상세 페이지
+ * 🔥 여기서 쟁점 리스트 + 센스메이킹 포함
  */
 issuesRouter.get("/:id", async (req, res) => {
   const issue = await prisma.issue.findFirst({
@@ -324,6 +325,28 @@ issuesRouter.get("/:id", async (req, res) => {
               updatedAt: true,
             },
           },
+        },
+      },
+      // 🔥 쟁점 리스트
+      talkingPoints: {
+        orderBy: { order: "asc" },
+        select: {
+          id: true,
+          order: true,
+          title: true,
+          body: true,
+          kind: true,
+        },
+      },
+      // 🔥 센스메이킹 패널
+      sensemaking: {
+        select: {
+          importance: true,
+          impactAreas: true,
+          difficultyLevel: true,
+          whyImportant: true,
+          everydayImpact: true,
+          keyQuestions: true,
         },
       },
     },
@@ -420,6 +443,10 @@ issuesRouter.get("/:id", async (req, res) => {
 
   const relatedIssues = Array.from(relatedMap.values());
 
+  // 🔥 쟁점 리스트 / 센스메이킹 매핑
+  const talkingPoints = (issue as any).talkingPoints ?? [];
+  const senseRaw = (issue as any).sensemaking ?? null;
+
   res.json({
     issue: {
       id: issue.id,
@@ -458,6 +485,31 @@ issuesRouter.get("/:id", async (req, res) => {
       })),
 
       relatedIssues,
+
+      // 🔥 쟁점 리스트
+      talkingPoints: talkingPoints.map((tp: any) => ({
+        id: tp.id,
+        order: tp.order,
+        title: tp.title,
+        body: tp.body,
+        kind: tp.kind ?? null,
+      })),
+
+      // 🔥 센스메이킹 패널
+      sensemaking: senseRaw
+        ? {
+            importance: senseRaw.importance,
+            impactAreas: Array.isArray(senseRaw.impactAreas)
+              ? senseRaw.impactAreas
+              : [],
+            difficultyLevel: senseRaw.difficultyLevel ?? null,
+            whyImportant: senseRaw.whyImportant,
+            everydayImpact: senseRaw.everydayImpact ?? null,
+            keyQuestions: Array.isArray(senseRaw.keyQuestions)
+              ? senseRaw.keyQuestions
+              : [],
+          }
+        : null,
     },
   });
 });
