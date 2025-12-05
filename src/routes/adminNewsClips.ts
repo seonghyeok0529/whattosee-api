@@ -10,8 +10,13 @@ import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
 
 import { refreshClipIssueAIFields } from "../services/clipIssueAi";
+import { OpenAI } from "openai";
 
 const router = Router();
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 /* ----------------------------------------------------
    HTML 엔티티 디코딩 유틸 (이 파일 안에서만 사용)
@@ -393,8 +398,7 @@ router.get(
       // target 이슈만 뽑아서 중복 제거
       const relatedMap = new Map<string, any>();
       for (const r of relations) {
-        const target =
-          r.fromClipIssueId === id ? r.to : r.from;
+        const target = r.fromClipIssueId === id ? r.to : r.from;
 
         if (!target) continue;
         if (target.id === id) continue;
@@ -688,6 +692,168 @@ router.post(
   }
 );
 
+/**
+ * 🔄 클립 이슈 쟁점 리스트(AI) 재생성
+ * POST /api/admin/news-clips/issues/:id/refresh-talking-points
+ */
+router.post(
+  "/news-clips/issues/:id/refresh-talking-points",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const { id } = req.params as { id: string };
+
+      const issue = await prisma.clipIssue.findUnique({
+        where: { id },
+        include: {
+          clips: {
+            include: { rawClip: true },
+          },
+        },
+      });
+
+      if (!issue) {
+        return res
+          .status(404)
+          .json({ ok: false, error: "Clip issue not found" });
+      }
+
+      // 🔍 컨텍스트: 포함된 클립 리스트
+      const clipsSummary = (issue.clips ?? [])
+        .map((c) => {
+          const side =
+            c.side === "left"
+              ? "진보"
+              : c.side === "right"
+              ? "보수"
+              : "중립";
+          const title = c.rawClip?.title ?? "(제목 없음)";
+          const channel = c.rawClip?.channel ?? "채널";
+          return `- [${side}] ${channel}: ${title}`;
+        })
+        .join("\n");
+
+      const prompt = `
+너는 한국어로 유튜브 뉴스 클립 이슈의 핵심 쟁점을 뽑는 에디터야.
+
+아래 정보를 보고, 시청자가 이 이슈를 이해할 때
+"어디에 집중해서 봐야 하는지"를 알려주는 쟁점 리스트를 만들어라.
+
+[이슈 제목]
+${issue.title ?? ""}
+
+[이슈 설명]
+${issue.description ?? ""}
+
+[AI 요약]
+${issue.aiSummary ?? ""}
+
+[진보 성향 요약]
+${issue.progressiveSummary ?? ""}
+
+[보수 성향 요약]
+${issue.conservativeSummary ?? ""}
+
+[포함된 클립 목록]
+${clipsSummary || "(클립 정보 없음)"}
+
+다음 규칙을 지켜라.
+
+1. JSON 배열만 출력한다. (설명 금지)
+2. 각 항목은 다음 필드를 가진다.
+   - order: 숫자 (1부터 시작, 정렬용)
+   - title: 쟁점 제목 (짧게, 한 줄)
+   - body: 이 쟁점이 무엇이고 왜 중요한지 2~3문장으로 설명
+   - kind: 아래 중 하나 (문자열)
+     * "fact"     : 핵심 사실/배경 정리
+     * "conflict" : 갈등·대립 구조
+     * "impact"   : 시민/사회에 미치는 영향
+     * "future"   : 향후 전개·쟁점
+     * "etc"      : 위에 안 들어가면 etc
+3. 쟁점은 3~7개 정도로 만든다.
+4. 모든 내용은 한국어로 작성한다.
+`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "너는 한국 정치·사회 이슈의 쟁점 리스트를 만드는 한국어 에디터이다. 반드시 JSON 배열만 출력한다.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.4,
+      });
+
+      const raw = completion.choices[0]?.message?.content ?? "[]";
+
+      let parsed: any[] = [];
+      try {
+        const tmp = JSON.parse(raw);
+        if (Array.isArray(tmp)) parsed = tmp;
+      } catch (e) {
+        console.error(
+          "[refresh-talking-points clips] JSON parse error:",
+          e,
+          "raw=",
+          raw
+        );
+      }
+
+      // 최소 검증/클린업
+      const talkingPoints = parsed
+        .filter(
+          (p) =>
+            p &&
+            typeof p.title === "string" &&
+            typeof p.body === "string"
+        )
+        .slice(0, 7)
+        .map((p, idx) => ({
+          order: typeof p.order === "number" ? p.order : idx + 1,
+          title: String(p.title).slice(0, 100),
+          body: String(p.body).slice(0, 800),
+          kind: typeof p.kind === "string" ? p.kind : "etc",
+        }));
+
+      // Prisma relation(talkingPoints) 전체 갈아끼우기
+      const updated = await prisma.clipIssue.update({
+        where: { id },
+        data: {
+          talkingPoints: {
+            deleteMany: {}, // 기존 쟁점 전부 삭제
+            create: talkingPoints.map((tp) => ({
+              order: tp.order,
+              title: tp.title,
+              body: tp.body,
+              kind: tp.kind,
+            })),
+          },
+        },
+        include: {
+          talkingPoints: {
+            orderBy: { order: "asc" },
+          },
+        },
+      });
+
+      return res.json({
+        ok: true,
+        items: updated.talkingPoints,
+      });
+    } catch (err) {
+      console.error(
+        "❌ [POST /api/admin/news-clips/issues/:id/refresh-talking-points] error:",
+        err
+      );
+      next(err);
+    }
+  }
+);
+
 // 🔄 클립 이슈 AI 요약 + 진영별 요약 재생성
 // POST /api/admin/news-clips/issues/:id/refresh-summary
 router.post(
@@ -717,7 +883,7 @@ router.post(
       });
     } catch (err) {
       console.error(
-        "❌ [POST /admin/news-clips/issues/:id/refresh-summary] error:",
+        "❌ [POST /api/admin/news-clips/issues/:id/refresh-summary] error:",
         err
       );
       next(err);
@@ -752,7 +918,7 @@ router.post(
       });
     } catch (err) {
       console.error(
-        "❌ [POST /admin/news-clips/issues/:id/refresh-side-summary] error:",
+        "❌ [POST /api/admin/news-clips/issues/:id/refresh-side-summary] error:",
         err
       );
       next(err);
@@ -786,7 +952,7 @@ router.post(
       });
     } catch (err) {
       console.error(
-        "❌ [POST /admin/news-clips/issues/:id/refresh-glossary] error:",
+        "❌ [POST /api/admin/news-clips/issues/:id/refresh-glossary] error:",
         err
       );
       next(err);
