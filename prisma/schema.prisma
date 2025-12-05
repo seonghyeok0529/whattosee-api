@@ -112,7 +112,6 @@ model User {
   regionLevel1  String?  // 시
   regionLevel2  String?  // 군,구
 
-
   agendas     Agenda[]
   comments    AgendaComment[]
   likes       AgendaLike[]
@@ -137,8 +136,8 @@ model User {
 
   eventLogs EventLog[]
 
-  role      Role     @default(user)
-  isAdmin   Boolean  @default(false)
+  role      Role       @default(user)
+  isAdmin   Boolean    @default(false)
   status    UserStatus @default(ACTIVE)
 }
 
@@ -328,6 +327,10 @@ model Issue {
   relatedTo   IssueRelation[] @relation("IssueRelationTo")
 
   communityLinks CommunityPostIssueLink[] @relation("IssueCommunityLinks")
+
+  // 🔥 새 컨텐츠 모듈
+  talkingPoints IssueTalkingPoint[]
+  sensemaking   IssueSensemaking?
 }
 
 model IssueRelation {
@@ -616,7 +619,7 @@ model ClipIssue {
   thumbnail   String?
   isHot       Boolean  @default(false)
 
-  aiSummary   String?
+  aiSummary          String?
   progressiveSummary String?  // 진보 성향 클립 요약
   conservativeSummary String? // 보수 성향 클립 요약
   glossaryText        String?
@@ -640,6 +643,10 @@ model ClipIssue {
   relatedTo   ClipIssueRelation[] @relation("ClipIssueRelationTo")
 
   // 필요하면 pageView도 ParentType = clipIssue로 재사용 가능
+
+  // 🔥 새 컨텐츠 모듈
+  talkingPoints ClipIssueTalkingPoint[]
+  sensemaking   ClipIssueSensemaking?
 }
 
 model ClipIssueRelation {
@@ -656,7 +663,6 @@ model ClipIssueRelation {
   @@unique([fromClipIssueId, toClipIssueId])
   @@index([toClipIssueId])
 }
-
 
 model ClipIssueComment {
   id          String   @id @default(cuid())
@@ -684,7 +690,7 @@ model ClipIssueCommentLike {
   commentId String
   createdAt DateTime @default(now())
 
-  user    User            @relation(fields: [userId], references: [id])
+  user    User             @relation(fields: [userId], references: [id])
   comment ClipIssueComment @relation(fields: [commentId], references: [id])
 
   @@id([userId, commentId])
@@ -716,7 +722,7 @@ model NewsClipViewLog {
   group       String
   createdAt   DateTime @default(now())
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   clipIssue ClipIssue? @relation(fields: [clipIssueId], references: [id], onDelete: SetNull)
   rawClip   RawClip?   @relation(fields: [rawClipId], references: [id], onDelete: SetNull)
 
@@ -735,7 +741,7 @@ model CommunityPost {
   content      String
   thumbnail    String?
   images       Json?        // ["https://.../1.png", "https://.../2.jpg"]
-  poll        CommunityPostPoll?    // 1:1
+  poll         CommunityPostPoll?    // 1:1
 
   likesCount   Int              @default(0)
   commentCount Int              @default(0)
@@ -832,4 +838,78 @@ model CommunityPostLike {
 
   @@id([userId, postId])
   @@index([postId])
+}
+
+/* ─────────────────────────────────────────
+   새로 추가된 컨텐츠 모델들
+   - 쟁점 리스트 (Issue / ClipIssue)
+   - 센스메이킹 패널 (Issue / ClipIssue)
+───────────────────────────────────────── */
+
+model IssueTalkingPoint {
+  id        String   @id @default(cuid())
+  issueId   String
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  order     Int      // 노출 순서 (1,2,3...)
+  title     String   // 쟁점 한 줄 제목
+  body      String   // 관찰 포인트 중심 설명
+  kind      String?  // 예: "policy", "value_conflict", "procedure" 등
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([issueId, order])
+}
+
+model ClipIssueTalkingPoint {
+  id          String   @id @default(cuid())
+  clipIssueId String
+  clipIssue   ClipIssue @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+
+  order       Int
+  title       String
+  body        String
+  kind        String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([clipIssueId, order])
+}
+
+model IssueSensemaking {
+  id        String   @id @default(cuid())
+  issueId   String   @unique
+  issue     Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  importance      Int       // 1~5
+  impactAreas     String[]  // ["경제", "복지"] 등
+  difficultyLevel String?   // 예: "BEGINNER" | "INTERMEDIATE" | "ADVANCED"
+
+  whyImportant   String     // 왜 중요한지
+  everydayImpact String?    // 일상 영향
+
+  keyQuestions   String[]   // 스스로 생각해볼 질문들
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ClipIssueSensemaking {
+  id          String   @id @default(cuid())
+  clipIssueId String   @unique
+  clipIssue   ClipIssue @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+
+  importance      Int
+  impactAreas     String[]
+  difficultyLevel String?
+
+  whyImportant   String
+  everydayImpact String?
+
+  keyQuestions   String[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
