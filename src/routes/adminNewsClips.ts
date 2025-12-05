@@ -372,6 +372,9 @@ router.get(
           clips: {
             include: { rawClip: true },
           },
+           talkingPoints: {
+            orderBy: { order: "asc" }, // 쟁점 순서대로
+          },
         },
       });
 
