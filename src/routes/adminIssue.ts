@@ -1082,6 +1082,169 @@ adminIssueRoutes.get(
 );
 
 /* ─────────────────────────────────────────────
+   이슈 생성 전, 기사 리스트 기반 쟁점 리스트 프리뷰
+   POST /api/admin/issues/preview-talking-points
+───────────────────────────────────────────── */
+adminIssueRoutes.post(
+  "/issues/preview-talking-points",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const {
+        title,
+        summary,
+        leftSummary,
+        rightSummary,
+        articleIds,
+      } = req.body as {
+        title?: string;
+        summary?: string;
+        leftSummary?: string;
+        rightSummary?: string;
+        articleIds?: string[];
+      };
+
+      if (!Array.isArray(articleIds) || articleIds.length === 0) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "articleIds must be a non-empty array" });
+      }
+
+      // 🔍 articleIds 는 현재 구조상 URL 이라고 가정 (admin recommended 쪽에서 그렇게 셋팅해놨으니까)
+      const urls = Array.from(
+        new Set(
+          articleIds
+            .map((u) => (u ?? "").trim())
+            .filter((u) => u.length > 0)
+        )
+      );
+
+      const raws = await prisma.rawArticle.findMany({
+        where: { url: { in: urls } },
+        select: {
+          outlet: true,
+          title: true,
+          side: true,
+          //text: true,
+          publishedAt: true,
+        },
+      });
+
+      const articlesSummary = raws
+        .map((a) => {
+          const outlet = a.outlet ?? "언론";
+          const t = a.title ?? "(제목 없음)";
+          const side =
+            a.side === "left"
+              ? "진보"
+              : a.side === "right"
+              ? "보수"
+              : "중립";
+          const date = a.publishedAt
+            ? a.publishedAt.toISOString().slice(0, 10)
+            : "";
+          return `- [${side}] ${outlet} (${date}) : ${t}`;
+        })
+        .join("\n");
+
+      const prompt = `
+너는 한국어로 인터넷 뉴스 기사 이슈의 핵심 쟁점을 뽑는 에디터야.
+
+아래 정보를 보고, 독자가 이 이슈를 이해할 때
+"어디에 집중해서 기사를 읽어야 하는지"를 알려주는 쟁점 리스트를 만들어라.
+
+[이슈 제목]
+${title ?? ""}
+
+[이슈 요약]
+${summary ?? ""}
+
+[좌/우 요약]
+- 진보 요약: ${leftSummary ?? ""}
+- 보수 요약: ${rightSummary ?? ""}
+
+[포함된 기사 목록]
+${articlesSummary || "(기사 메타 정보 없음)"}
+
+규칙을 지켜라.
+
+1. JSON 배열만 출력한다. (설명 문장, 주석, 마크다운 금지)
+2. 각 항목은 다음 필드를 가진다.
+   - order: 숫자 (1부터 시작, 정렬용)
+   - title: 쟁점 제목 (짧게, 한 줄)
+   - body: 이 쟁점이 무엇이고 왜 중요한지 2~3문장으로 설명
+   - kind: 아래 중 하나 (문자열)
+     * "fact"     : 핵심 사실/배경 정리
+     * "conflict" : 갈등·대립 구조
+     * "impact"   : 시민/사회에 미치는 영향
+     * "future"   : 향후 전개·쟁점
+     * "etc"      : 위에 안 들어가면 etc
+3. 쟁점은 3~7개 정도로 만든다.
+4. 모든 내용은 한국어로 작성한다.
+`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "너는 한국 정치·사회 이슈의 쟁점 리스트를 만드는 한국어 에디터이다. 반드시 JSON 배열만 출력한다.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.4,
+      });
+
+      const raw = completion.choices[0]?.message?.content ?? "[]";
+
+      let parsed: any[] = [];
+      try {
+        const tmp = JSON.parse(raw);
+        if (Array.isArray(tmp)) parsed = tmp;
+      } catch (e) {
+        console.error(
+          "[issues preview-talking-points] JSON parse error:",
+          e,
+          "raw=",
+          raw
+        );
+      }
+
+      const talkingPoints = parsed
+        .filter(
+          (p) =>
+            p &&
+            typeof p.title === "string" &&
+            typeof p.body === "string"
+        )
+        .slice(0, 7)
+        .map((p, idx) => ({
+          order: typeof p.order === "number" ? p.order : idx + 1,
+          title: String(p.title).slice(0, 100),
+          body: String(p.body).slice(0, 800),
+          kind: typeof p.kind === "string" ? p.kind : "etc",
+        }));
+
+      return res.json({
+        ok: true,
+        items: talkingPoints,
+      });
+    } catch (err) {
+      console.error(
+        "❌ [POST /api/admin/issues/preview-talking-points] error:",
+        err
+      );
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
+
+/* ─────────────────────────────────────────────
    11. 이슈 쟁점 리스트(AI) 재생성
    POST /api/admin/issues/:id/refresh-talking-points
 ───────────────────────────────────────────── */
@@ -1124,7 +1287,7 @@ adminIssueRoutes.post(
             outlet: true,
             title: true,
             side: true,
-            text: true,
+            //text: true,
             publishedAt: true,
           },
         });
@@ -1265,6 +1428,75 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
     }
   }
 );
+
+/**
+ * ✏️ 이슈 쟁점 리스트 수동 저장
+ * PUT /api/admin/issues/:id/talking-points
+ * body: { items: { order?: number; title: string; body: string; kind?: string | null; }[] }
+ */
+adminIssueRoutes.put(
+  "/issues/:id/talking-points",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+      const { items } = req.body as {
+        items?: {
+          order?: number;
+          title: string;
+          body: string;
+          kind?: string | null;
+        }[];
+      };
+
+      if (!Array.isArray(items)) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "items must be an array" });
+      }
+
+      // 최소 유효성 + 기본값 정리
+      const cleaned = items
+        .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+        .map((i, idx) => ({
+          order: typeof i.order === "number" ? i.order : idx + 1,
+          title: String(i.title).slice(0, 100),
+          body: String(i.body).slice(0, 800),
+          kind: i.kind ? String(i.kind) : "etc",
+        }));
+
+      const updated = await prisma.issue.update({
+        where: { id },
+        data: {
+          talkingPoints: {
+            deleteMany: {},      // 기존 쟁점 전부 삭제
+            create: cleaned,     // 새 쟁점 전부 생성
+          },
+        },
+        include: {
+          talkingPoints: {
+            orderBy: { order: "asc" },
+          },
+        },
+      });
+
+      return res.json({
+        ok: true,
+        items: updated.talkingPoints,
+      });
+    } catch (err) {
+      console.error(
+        "❌ [PUT /api/admin/issues/:id/talking-points] error:",
+        err
+      );
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
 
 /* ─────────────────────────────────────────────
    12. 이슈 AI 제목/요약 재생성
@@ -1452,3 +1684,233 @@ adminIssueRoutes.post(
   }
 );
 
+/* ─────────────────────────────────────────────
+   15. 이슈 쟁점 리스트 검증 (원문 기반 fact-check)
+   POST /api/admin/issues/:id/validate-talking-points
+   - DB에 저장된 talkingPoints 또는 body에서 받은 talkingPoints 기준으로
+     기사 원문(text)을 참고해 쟁점의 근거 여부를 평가
+───────────────────────────────────────────── */
+adminIssueRoutes.post(
+  "/issues/:id/validate-talking-points",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const {
+        talkingPoints: talkingPointsFromBody,
+      } = req.body as {
+        talkingPoints?: {
+          order?: number;
+          title: string;
+          body: string;
+          kind?: string;
+        }[];
+      };
+
+      // 1) 이슈 + 연결 기사 + 저장된 쟁점 가져오기
+      const issue = await prisma.issue.findUnique({
+        where: { id },
+        include: {
+          sources: true,
+          talkingPoints: {
+            orderBy: { order: "asc" },
+          },
+        },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      // 2) 검증 대상 쟁점 리스트 결정
+      //    - body에 talkingPoints가 오면 그걸 우선 사용 (프론트에서 수정 중인 값 보내줄 수 있음)
+      //    - 없으면 DB에 저장된 IssueTalkingPoint 사용
+      const baseTalkingPoints =
+        Array.isArray(talkingPointsFromBody) && talkingPointsFromBody.length > 0
+          ? talkingPointsFromBody
+          : issue.talkingPoints.map((tp) => ({
+              order: tp.order,
+              title: tp.title,
+              body: tp.body,
+              kind: tp.kind ?? undefined,
+            }));
+
+      if (baseTalkingPoints.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "NO_TALKING_POINTS",
+          message: "검증할 쟁점 리스트가 없습니다.",
+        });
+      }
+
+      // 3) 이 이슈에 연결된 기사 URL 기준으로 rawArticle + text 가져오기
+      const urls = issue.sources
+        .map((s) => s.url)
+        .filter((u): u is string => !!u && u.trim().length > 0);
+
+      if (urls.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "NO_ARTICLES",
+          message: "연결된 기사(rawArticle)가 없어 검증할 수 없습니다.",
+        });
+      }
+
+      const raws = await prisma.rawArticle.findMany({
+        where: { url: { in: urls } },
+        select: {
+          url: true,
+          outlet: true,
+          title: true,
+          side: true,
+          text: true,
+          publishedAt: true,
+        },
+      });
+
+      if (raws.length === 0) {
+        return res.status(400).json({
+          ok: false,
+          error: "NO_RAW_TEXT",
+          message: "연결된 기사 원문(text)이 없어 검증할 수 없습니다.",
+        });
+      }
+
+      // 4) LLM에 넘길 기사 컨텍스트 구성 (원문 전체 X, 일부만)
+      const articleBlocks = raws.map((a, idx) => {
+        const outlet = a.outlet ?? "언론";
+        const title = a.title ?? "(제목 없음)";
+        const side =
+          a.side === "left"
+            ? "진보"
+            : a.side === "right"
+            ? "보수"
+            : "중립";
+        const date = a.publishedAt
+          ? a.publishedAt.toISOString().slice(0, 10)
+          : "";
+        const text = (a.text ?? "").slice(0, 1500); // ✅ 과도한 재현 방지: 앞부분만 잘라서 사용
+
+        return `[#${idx + 1}] [${side}] ${outlet} (${date}) : ${title}
+본문 일부:
+${text}`;
+      });
+
+      const talkingPointsJson = JSON.stringify(baseTalkingPoints, null, 2);
+
+      const prompt = `
+너는 한국어 뉴스 기사의 쟁점 리스트를 "사실에 근거했는지" 확인하는 팩트체킹 에디터다.
+
+아래 이슈와 연결된 기사들(원문 일부)과 쟁점 리스트를 보고,
+각 쟁점이 기사 내용에 얼마나 근거하는지 평가하라.
+
+[이슈 제목]
+${issue.title ?? ""}
+
+[이슈 요약]
+${issue.summary ?? ""}
+
+[좌/우 요약]
+- 진보 요약: ${issue.leftSummary ?? ""}
+- 보수 요약: ${issue.rightSummary ?? ""}
+
+[연결된 기사들(원문 일부)]
+${articleBlocks.join("\n\n")}
+
+[검증 대상 쟁점 리스트(JSON)]
+${talkingPointsJson}
+
+평가 규칙:
+
+1. 각 쟁점에 대해 다음 중 하나의 verdict를 선택한다.
+   - "supported"          : 기사들에서 명확하게 근거를 찾을 수 있음
+   - "partially_supported": 일부는 근거가 있지만, 과장/추측/해석이 섞여 있음
+   - "not_supported"      : 기사 내용으로는 뒷받침되지 않음
+   - "unclear"            : 기사 일부와 관련이 있어 보이지만, 명확하게 판단하기 어려움
+
+2. 각 쟁점마다 다음 정보를 JSON 객체로 반환한다.
+   - order: 원래 쟁점의 order (없으면 1부터 순서대로 부여)
+   - title: 원래 쟁점 제목
+   - verdict: "supported" | "partially_supported" | "not_supported" | "unclear"
+   - reason: 한국어로 2~3문장 설명 (어떤 점이 기사와 일치/불일치하는지, 과장 여부 등)
+   - suggestion: 선택값. verdict가 "partially_supported" 또는 "not_supported"인 경우,
+                 사실에 더 가깝게 다듬은 쟁점 설명(본문)을 제안한다.
+
+3. 기사 원문을 그대로 길게 복사하지 말고,
+   핵심 내용만 짧게 요약해서 설명하라.
+
+4. 최종 출력은 JSON 배열만 반환한다. (설명 문장, 마크다운, 주석 금지)
+`;
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "너는 한국 정치·사회 이슈의 쟁점 리스트가 기사 원문에 근거하는지 평가하는 한국어 팩트체킹 에디터이다. 반드시 JSON 배열만 출력한다.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.2,
+      });
+
+      const raw = completion.choices[0]?.message?.content ?? "[]";
+
+      let parsed: any[] = [];
+      try {
+        const tmp = JSON.parse(raw);
+        if (Array.isArray(tmp)) parsed = tmp;
+      } catch (e) {
+        console.error(
+          "[issues validate-talking-points] JSON parse error:",
+          e,
+          "raw=",
+          raw
+        );
+      }
+
+      // 최소 검증/클린업
+      const results = parsed
+        .filter(
+          (p) =>
+            p &&
+            typeof p.title === "string" &&
+            typeof p.verdict === "string" &&
+            typeof p.reason === "string"
+        )
+        .map((p, idx) => ({
+          order:
+            typeof p.order === "number"
+              ? p.order
+              : baseTalkingPoints[idx]?.order ?? idx + 1,
+          title: String(p.title),
+          verdict: ["supported", "partially_supported", "not_supported", "unclear"].includes(
+            p.verdict
+          )
+            ? p.verdict
+            : "unclear",
+          reason: String(p.reason).slice(0, 800),
+          suggestion:
+            typeof p.suggestion === "string"
+              ? String(p.suggestion).slice(0, 800)
+              : null,
+        }));
+
+      return res.json({
+        ok: true,
+        items: results,
+      });
+    } catch (err) {
+      console.error(
+        "❌ [POST /api/admin/issues/:id/validate-talking-points] error:",
+        err
+      );
+      return res
+        .status(500)
+        .json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  }
+);
