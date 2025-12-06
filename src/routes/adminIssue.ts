@@ -1276,7 +1276,7 @@ adminIssueRoutes.post(
         outlet: string | null;
         title: string | null;
         side: string | null;
-        text: string | null;
+        //text: string | null;
         publishedAt: Date | null;
       }[] = [];
 
