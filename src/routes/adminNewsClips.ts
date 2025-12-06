@@ -34,6 +34,29 @@ function decodeHtml(str: string | null | undefined): string | null {
     .replace(/&nbsp;/g, " ");
 }
 
+type IncomingTalkingPoint = {
+  order?: number;
+  title: string;
+  body: string;
+  kind?: string | null;
+};
+
+function sanitizeTalkingPoints(items: IncomingTalkingPoint[] | undefined) {
+  if (!Array.isArray(items)) return null;
+
+  const cleaned = items
+    .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+    .map((i, idx) => ({
+      order: typeof i.order === "number" ? i.order : idx + 1,
+      title: String(i.title).slice(0, 100),
+      body: String(i.body).slice(0, 800),
+      kind: i.kind ? String(i.kind) : "etc",
+    }));
+
+  return cleaned;
+}
+
+
 // 객체 전체 디코드 (string, array, nested object 포함)
 // Date 같은 객체는 건들지 않도록 예외 처리
 function decodeObject<T extends Record<string, any>>(obj: T): T {
@@ -453,6 +476,19 @@ router.post(
   adminAuth,
   async (req, res, next) => {
     try {
+      const body = req.body as {
+        title?: string;
+        description?: string | null;
+        aiSummary?: string | null;
+        isHot?: boolean;
+        clipIds?: string[];
+        leftSummary?: string | null;
+        rightSummary?: string | null;
+        fromClusterId?: string | null;
+        glossaryText?: string | null;
+        talkingPoints?: IncomingTalkingPoint[];
+      };
+
       const {
         title,
         description,
@@ -463,17 +499,8 @@ router.post(
         rightSummary,
         fromClusterId,
         glossaryText,
-      } = req.body as {
-        title?: string;
-        description?: string | null;
-        aiSummary?: string | null;
-        isHot?: boolean;
-        clipIds?: string[];
-        leftSummary?: string | null;
-        rightSummary?: string | null;
-        fromClusterId?: string | null;
-        glossaryText?: string | null;
-      };
+        talkingPoints,
+      } = body;
 
       if (!title || !clipIds || clipIds.length === 0) {
         return res.status(400).json({
@@ -496,6 +523,8 @@ router.post(
         });
       }
 
+      const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
+
       const issue = await prisma.clipIssue.create({
         data: {
           title,
@@ -513,9 +542,15 @@ router.post(
               side: (c.side as any) ?? "neutral",
             })),
           },
+          ...(cleanedTalkingPoints && {
+            talkingPoints: {
+              create: cleanedTalkingPoints,
+            },
+          }),
         },
         include: {
           clips: { include: { rawClip: true } },
+          talkingPoints: { orderBy: { order: "asc" } },
         },
       });
 
@@ -564,6 +599,19 @@ router.patch(
   async (req, res, next) => {
     try {
       const id = req.params.id;
+
+      const body = req.body as {
+        title?: string;
+        description?: string | null;
+        aiSummary?: string | null;
+        isHot?: boolean;
+        clipIds?: string[];
+        leftSummary?: string | null;
+        rightSummary?: string | null;
+        glossaryText?: string | null;
+        talkingPoints?: IncomingTalkingPoint[];
+      };
+
       const {
         title,
         description,
@@ -573,16 +621,8 @@ router.patch(
         leftSummary,
         rightSummary,
         glossaryText,
-      } = req.body as {
-        title?: string;
-        description?: string | null;
-        aiSummary?: string | null;
-        isHot?: boolean;
-        clipIds?: string[];
-        leftSummary?: string | null;
-        rightSummary?: string | null;
-        glossaryText?: string | null;
-      };
+        talkingPoints,
+      } = body;
 
       const clipIdsSafe = clipIds ?? [];
 
@@ -593,27 +633,40 @@ router.patch(
           })
         : [];
 
+      const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
+
+      const data: any = {
+        title,
+        description: description ?? null,
+        aiSummary: aiSummary ?? null,
+        isHot: !!isHot,
+        clipCount: clipIdsSafe.length,
+        progressiveSummary: leftSummary ?? null,
+        conservativeSummary: rightSummary ?? null,
+        glossaryText: glossaryText ?? null,
+        clips: {
+          deleteMany: {}, // 이전 연결 전부 제거
+          create: rawClipsInIssue.map((c) => ({
+            rawClip: { connect: { id: c.id } },
+            side: (c.side as any) ?? "neutral",
+          })),
+        },
+      };
+
+      // 쟁점이 넘어온 경우에만 갈아끼우기
+      if (cleanedTalkingPoints) {
+        data.talkingPoints = {
+          deleteMany: {},
+          create: cleanedTalkingPoints,
+        };
+      }
+
       const issue = await prisma.clipIssue.update({
         where: { id },
-        data: {
-          title,
-          description: description ?? null,
-          aiSummary: aiSummary ?? null,
-          isHot: !!isHot,
-          clipCount: clipIdsSafe.length,
-          progressiveSummary: leftSummary ?? null,
-          conservativeSummary: rightSummary ?? null,
-          glossaryText: glossaryText ?? null,
-          clips: {
-            deleteMany: {}, // 이전 연결 전부 제거
-            create: rawClipsInIssue.map((c) => ({
-              rawClip: { connect: { id: c.id } },
-              side: (c.side as any) ?? "neutral",
-            })),
-          },
-        },
+        data,
         include: {
           clips: { include: { rawClip: true } },
+          talkingPoints: { orderBy: { order: "asc" } },
         },
       });
 
@@ -632,6 +685,7 @@ router.patch(
     }
   }
 );
+
 
 // 🔗 클립 이슈 연관 관계 저장
 // POST /api/admin/news-clips/issues/:id/relations
