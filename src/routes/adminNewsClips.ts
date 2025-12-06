@@ -857,6 +857,72 @@ ${clipsSummary || "(클립 정보 없음)"}
   }
 );
 
+/**
+ * ✏️ 클립 이슈 쟁점 리스트 수동 저장
+ * PUT /api/admin/news-clips/issues/:id/talking-points
+ * body: { items: { order?: number; title: string; body: string; kind?: string | null; }[] }
+ */
+router.put(
+  "/news-clips/issues/:id/talking-points",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const { id } = req.params as { id: string };
+      const { items } = req.body as {
+        items?: {
+          order?: number;
+          title: string;
+          body: string;
+          kind?: string | null;
+        }[];
+      };
+
+      if (!Array.isArray(items)) {
+        return res
+          .status(400)
+          .json({ ok: false, error: "items must be an array" });
+      }
+
+      // 최소 유효성 + 기본값 정리
+      const cleaned = items
+        .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+        .map((i, idx) => ({
+          order: typeof i.order === "number" ? i.order : idx + 1,
+          title: String(i.title).slice(0, 100),
+          body: String(i.body).slice(0, 800),
+          kind: i.kind ? String(i.kind) : "etc",
+        }));
+
+      // 전부 갈아끼우기
+      const updated = await prisma.clipIssue.update({
+        where: { id },
+        data: {
+          talkingPoints: {
+            deleteMany: {},
+            create: cleaned,
+          },
+        },
+        include: {
+          talkingPoints: { orderBy: { order: "asc" } },
+        },
+      });
+
+      return res.json({
+        ok: true,
+        items: decodeObject(updated.talkingPoints as any),
+      });
+    } catch (err) {
+      console.error(
+        "❌ [PUT /admin/news-clips/issues/:id/talking-points] error:",
+        err
+      );
+      next(err);
+    }
+  }
+);
+
+
 // 🔄 클립 이슈 AI 요약 + 진영별 요약 재생성
 // POST /api/admin/news-clips/issues/:id/refresh-summary
 router.post(
