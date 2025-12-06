@@ -82,6 +82,29 @@ async function syncIssueSourcesByUrls(issueId: string, articleIds?: string[]) {
   }
 }
 
+type IncomingTalkingPoint = {
+  order?: number;
+  title: string;
+  body: string;
+  kind?: string | null;
+};
+
+function sanitizeTalkingPoints(items?: IncomingTalkingPoint[] | null) {
+  if (!Array.isArray(items) || items.length === 0) return null;
+
+  const cleaned = items
+    .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+    .map((i, idx) => ({
+      order: typeof i.order === "number" ? i.order : idx + 1,
+      title: String(i.title).slice(0, 100),
+      body: String(i.body).slice(0, 800),
+      kind: i.kind ? String(i.kind) : "etc",
+    }));
+
+  return cleaned.length ? cleaned : null;
+}
+
+
 /* ─────────────────────────────────────────────
    Helper: status 매핑 (소문자/대문자 둘 다 허용)
 ───────────────────────────────────────────── */
@@ -648,6 +671,7 @@ adminIssueRoutes.post(
         fromSuggestionId,
         leftSummary,
         rightSummary,
+        talkingPoints, // 👈 추가
       } = req.body as {
         title?: string;
         summary?: string;
@@ -657,7 +681,10 @@ adminIssueRoutes.post(
         fromSuggestionId?: string | null;
         leftSummary?: string;
         rightSummary?: string;
+        talkingPoints?: IncomingTalkingPoint[]; // 👈 추가
       };
+
+      const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
 
       // 1) 일단 빈 값이라도 생성
       const issue = await prisma.issue.create({
@@ -668,6 +695,11 @@ adminIssueRoutes.post(
           status: toIssueStatus(status),
           leftSummary: leftSummary?.trim() ?? null,
           rightSummary: rightSummary?.trim() ?? null,
+          ...(cleanedTalkingPoints && {
+            talkingPoints: {
+              create: cleanedTalkingPoints,
+            },
+          }),
         },
       });
 
@@ -753,6 +785,7 @@ adminIssueRoutes.patch(
       keywords,
       leftSummary,
       rightSummary,
+      talkingPoints,        // 👈 추가
     } = req.body as {
       title?: string;
       summary?: string;
@@ -761,27 +794,40 @@ adminIssueRoutes.patch(
       keywords?: string[];
       leftSummary?: string;
       rightSummary?: string;
+      talkingPoints?: IncomingTalkingPoint[]; // 👈 추가
     };
 
     try {
+      const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
+
+      const data: Prisma.IssueUpdateInput = {
+        ...(title !== undefined ? { title: title.trim() } : {}),
+        ...(summary !== undefined
+          ? { summary: summary?.trim() ?? null }
+          : {}),
+        ...(status !== undefined ? { status: toIssueStatus(status) } : {}),
+        ...(keywords !== undefined
+          ? { tags: Array.isArray(keywords) ? keywords : [] }
+          : {}),
+        ...(leftSummary !== undefined
+          ? { leftSummary: leftSummary.trim() }
+          : {}),
+        ...(rightSummary !== undefined
+          ? { rightSummary: rightSummary.trim() }
+          : {}),
+      };
+
+      // 쟁점이 같이 넘어온 경우에만 덮어쓰기
+      if (cleanedTalkingPoints) {
+        (data as any).talkingPoints = {
+          deleteMany: {},
+          create: cleanedTalkingPoints,
+        };
+      }
+
       const issue = await prisma.issue.update({
         where: { id },
-        data: {
-          ...(title !== undefined ? { title: title.trim() } : {}),
-          ...(summary !== undefined
-            ? { summary: summary?.trim() ?? null }
-            : {}),
-          ...(status !== undefined ? { status: toIssueStatus(status) } : {}),
-          ...(keywords !== undefined
-            ? { tags: Array.isArray(keywords) ? keywords : [] }
-            : {}),
-          ...(leftSummary !== undefined
-            ? { leftSummary: leftSummary.trim() }
-            : {}),
-          ...(rightSummary !== undefined
-            ? { rightSummary: rightSummary.trim() }
-            : {}),
-        },
+        data,
       });
 
       if (Array.isArray(articleIds)) {
