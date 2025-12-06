@@ -133,6 +133,8 @@ newsClipsRouter.get("/:id", async (req, res) => {
       clips: {
         include: { rawClip: true },
       },
+     talkingPoints: true,
+     sensemaking: true, 
     },
   });
 
@@ -235,6 +237,8 @@ newsClipsRouter.get("/:id", async (req, res) => {
     progressiveSummary: decode(clipIssue.progressiveSummary),
     conservativeSummary: decode(clipIssue.conservativeSummary),
     relatedClipIssues,
+   talkingPoints: (clipIssue as any).talkingPoints ?? [],
+   sensemaking: (clipIssue as any).sensemaking ?? null,
   };
 
   res.json(payload);
