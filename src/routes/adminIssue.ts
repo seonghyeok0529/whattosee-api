@@ -538,6 +538,10 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
         relatedTo: {
           include: { from: true },
         },
+        // 🔹 쟁점 리스트 포함
+        talkingPoints: {
+          orderBy: { order: "asc" },
+        },
       },
     });
 
@@ -581,52 +585,59 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
       );
     }
 
-    // 3) 최종 AdminArticle로 매핑
+    // 3) 프론트에서 쓰기 좋은 Article 형태로 변환
     const articles = issue.sources.map((s) => {
       const raw = s.url ? rawByUrl.get(s.url) : undefined;
-
-      const url = s.url ?? raw?.url ?? "";
-      const publishedAt = raw?.publishedAt ?? s.createdAt;
-      const summary = raw?.text ? raw.text.slice(0, 300) : "";
-      const outlet = raw?.outlet ?? s.outlet ?? "언론";
-      const title = raw?.title ?? s.title ?? "(제목 없음)";
-      const side = raw?.side ?? s.side ?? "center";
+      const publishedAt =
+        raw?.publishedAt ??
+        s.createdAt ??
+        new Date(); // 최소한 날짜 하나는 보장
 
       return {
-        id: url || String(raw?.id ?? s.id), // ✅ ID = URL
-        title,
-        source: outlet,
-        date: publishedAt ? publishedAt.toISOString().slice(0, 10) : "",
-        url,
-        summary,
-        side,
+        id: String(s.id),
+        title: raw?.title ?? s.title ?? "(제목 없음)",
+        source: raw?.outlet ?? s.outlet ?? "언론",
+        date: publishedAt.toISOString().slice(0, 10),
+        url: s.url,
+        summary: "", // 필요하면 raw.text 일부 잘라서 넣어도 됨
         keywords: [] as string[],
       };
     });
 
-    const articleIds = articles.map((a) => a.id); // ✅ 이제 전부 URL 배열
+    const articleIds = articles.map((a) => String(a.id));
 
-    // 4) 연관 이슈 그대로
-    const relationsFrom = issue.relatedFrom.map((r) => ({
-      id: r.to.id,
-      title: r.to.title,
-      status: r.to.status,
-      relationId: r.id,
-      relationType: r.relationType,
+    // 4) 연관 이슈(flat 구조로 변환)
+    const relationsFrom = issue.relatedFrom.map((rel) => ({
+      id: rel.to.id,
+      title: rel.to.title ?? "",
+      status: rel.to.status ?? "draft",
+      relationId: rel.id,
+      relationType: rel.relationType ?? null,
       direction: "FROM" as const,
-      confidence: r.confidence,
-      createdAt: r.createdAt,
+      confidence: rel.confidence ?? null,
+      createdAt: rel.createdAt,
     }));
 
-    const relationsTo = issue.relatedTo.map((r) => ({
-      id: r.from.id,
-      title: r.from.title,
-      status: r.from.status,
-      relationId: r.id,
-      relationType: r.relationType,
+    const relationsTo = issue.relatedTo.map((rel) => ({
+      id: rel.from.id,
+      title: rel.from.title ?? "",
+      status: rel.from.status ?? "draft",
+      relationId: rel.id,
+      relationType: rel.relationType ?? null,
       direction: "TO" as const,
-      confidence: r.confidence,
-      createdAt: r.createdAt,
+      confidence: rel.confidence ?? null,
+      createdAt: rel.createdAt,
+    }));
+
+    const relatedIssues = [...relationsFrom, ...relationsTo];
+
+    // 5) 쟁점 리스트(Talking Points) 변환
+    const talkingPoints = issue.talkingPoints.map((tp) => ({
+      id: String(tp.id),
+      order: tp.order ?? 0,
+      title: tp.title ?? "",
+      body: tp.body ?? "",
+      kind: (tp.kind as any) ?? "etc",
     }));
 
     return res.json({
@@ -638,19 +649,22 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
         status: issue.status,
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
-        keywords: issue.tags ?? [],
-        articles,
-        articleIds,
-        relatedIssues: [...relationsFrom, ...relationsTo],
         leftSummary: issue.leftSummary,
         rightSummary: issue.rightSummary,
+        glossaryText: issue.glossaryText ?? null,
+
+        articles,
+        articleIds,
+        relatedIssues,
+        talkingPoints, // 🔹 여기!
       },
     });
-  } catch (e) {
-    console.error("GET /api/admin/issues/:id error", e);
+  } catch (err) {
+    console.error("[adminIssueRoutes.get /issues/:id] error", err);
     return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }
 });
+
 
 /* ─────────────────────────────────────────────
    5. 이슈 생성 + AI 자동 요약/제목 생성
