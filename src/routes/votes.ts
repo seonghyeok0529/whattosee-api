@@ -6,11 +6,11 @@ import jwt from "jsonwebtoken";
 import type { Prisma } from "@prisma/client";
 
 // ── helper: enum parser (문자열 → 리터럴 유니온으로 좁히기)
-type ParentTypeT = 'issue' | 'agenda';
+type ParentTypeT = 'issue' | 'agenda' | 'clipIssue';
 type StanceT = 'agree' | 'neutral' | 'disagree';
 
 const parseParentType = (v: unknown): ParentTypeT | null =>
-  v === 'issue' || v === 'agenda' ? v : null;
+  v === 'issue' || v === 'agenda' || v === 'clipIssue' ? v : null;
 
 const parseStance = (v: unknown): StanceT | null =>
   v === 'agree' || v === 'neutral' || v === 'disagree' ? v : null;
