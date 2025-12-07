@@ -649,8 +649,6 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
         status: issue.status,
         createdAt: issue.createdAt,
         updatedAt: issue.updatedAt,
-        leftSummary: issue.leftSummary,
-        rightSummary: issue.rightSummary,
         glossaryText: issue.glossaryText ?? null,
 
         articles,
@@ -683,8 +681,6 @@ adminIssueRoutes.post(
         articleIds,
         keywords,
         fromSuggestionId,
-        leftSummary,
-        rightSummary,
         talkingPoints, // 👈 추가
       } = req.body as {
         title?: string;
@@ -693,8 +689,6 @@ adminIssueRoutes.post(
         articleIds?: string[];
         keywords?: string[];
         fromSuggestionId?: string | null;
-        leftSummary?: string;
-        rightSummary?: string;
         talkingPoints?: IncomingTalkingPoint[]; // 👈 추가
       };
 
@@ -707,8 +701,6 @@ adminIssueRoutes.post(
           summary: summary?.trim() ?? null,
           tags: Array.isArray(keywords) ? keywords : [],
           status: toIssueStatus(status),
-          leftSummary: leftSummary?.trim() ?? null,
-          rightSummary: rightSummary?.trim() ?? null,
           ...(cleanedTalkingPoints && {
             talkingPoints: {
               create: cleanedTalkingPoints,
@@ -797,8 +789,6 @@ adminIssueRoutes.patch(
       status,
       articleIds,
       keywords,
-      leftSummary,
-      rightSummary,
       talkingPoints,        // 👈 추가
     } = req.body as {
       title?: string;
@@ -806,8 +796,6 @@ adminIssueRoutes.patch(
       status?: string;
       articleIds?: string[];
       keywords?: string[];
-      leftSummary?: string;
-      rightSummary?: string;
       talkingPoints?: IncomingTalkingPoint[]; // 👈 추가
     };
 
@@ -822,12 +810,6 @@ adminIssueRoutes.patch(
         ...(status !== undefined ? { status: toIssueStatus(status) } : {}),
         ...(keywords !== undefined
           ? { tags: Array.isArray(keywords) ? keywords : [] }
-          : {}),
-        ...(leftSummary !== undefined
-          ? { leftSummary: leftSummary.trim() }
-          : {}),
-        ...(rightSummary !== undefined
-          ? { rightSummary: rightSummary.trim() }
           : {}),
       };
 
@@ -1154,14 +1136,10 @@ adminIssueRoutes.post(
       const {
         title,
         summary,
-        leftSummary,
-        rightSummary,
         articleIds,
       } = req.body as {
         title?: string;
         summary?: string;
-        leftSummary?: string;
-        rightSummary?: string;
         articleIds?: string[];
       };
 
@@ -1219,10 +1197,6 @@ ${title ?? ""}
 
 [이슈 요약]
 ${summary ?? ""}
-
-[좌/우 요약]
-- 진보 요약: ${leftSummary ?? ""}
-- 보수 요약: ${rightSummary ?? ""}
 
 [포함된 기사 목록]
 ${articlesSummary || "(기사 메타 정보 없음)"}
@@ -1383,10 +1357,6 @@ ${issue.title ?? ""}
 
 [이슈 요약]
 ${issue.summary ?? ""}
-
-[좌/우 요약]
-- 진보 요약: ${issue.leftSummary ?? ""}
-- 보수 요약: ${issue.rightSummary ?? ""}
 
 [포함된 기사 목록]
 ${articlesSummary || "(기사 메타 정보 없음)"}
@@ -1633,80 +1603,9 @@ adminIssueRoutes.post(
   }
 );
 
-/* ─────────────────────────────────────────────
-   13. 좌/우 언론 요약 자동 생성
-   POST /api/admin/issues/:id/refresh-side-summary
-───────────────────────────────────────────── */
-adminIssueRoutes.post(
-  "/issues/:id/refresh-side-summary",
-  requireAuth,
-  adminAuth,
-  async (req: Request, res: Response) => {
-    try {
-      const { id } = req.params;
-
-      const issue = await prisma.issue.findUnique({
-        where: { id },
-        include: { sources: true },
-      });
-
-      if (!issue) {
-        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
-      }
-
-      const hasLeft = (issue.leftSummary ?? "").trim().length > 0;
-      const hasRight = (issue.rightSummary ?? "").trim().length > 0;
-
-      let newLeft: string | undefined;
-      let newRight: string | undefined;
-
-      // 🔹 진보 요약이 비어 있을 때만 생성
-      if (!hasLeft) {
-        try {
-          const leftSummary = await generateSideSummary(id, "left");
-          if (leftSummary?.trim()?.length) {
-            newLeft = leftSummary.trim();
-          }
-        } catch (e) {
-          console.error("[refresh-side-summary] left 생성 실패:", e);
-        }
-      }
-
-      // 🔹 보수 요약이 비어 있을 때만 생성
-      if (!hasRight) {
-        try {
-          const rightSummary = await generateSideSummary(id, "right");
-          if (rightSummary?.trim()?.length) {
-            newRight = rightSummary.trim();
-          }
-        } catch (e) {
-          console.error("[refresh-side-summary] right 생성 실패:", e);
-        }
-      }
-
-      if (!newLeft && !newRight) {
-        // 생성할 게 없으면 기존 이슈 그대로 반환
-        return res.json({ ok: true, item: issue });
-      }
-
-      const updated = await prisma.issue.update({
-        where: { id },
-        data: {
-          ...(newLeft ? { leftSummary: newLeft } : {}),
-          ...(newRight ? { rightSummary: newRight } : {}),
-        },
-      });
-
-      return res.json({ ok: true, item: updated });
-    } catch (err) {
-      console.error("refresh-side-summary error:", err);
-      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
-    }
-  }
-);
 
 /* ─────────────────────────────────────────────
-   14. 이슈 용어 사전 재생성
+   13. 이슈 용어 사전 재생성
    POST /api/admin/issues/:id/refresh-glossary
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
@@ -1745,7 +1644,7 @@ adminIssueRoutes.post(
 );
 
 /* ─────────────────────────────────────────────
-   15. 이슈 쟁점 리스트 검증 (원문 기반 fact-check)
+   14. 이슈 쟁점 리스트 검증 (원문 기반 fact-check)
    POST /api/admin/issues/:id/validate-talking-points
    - DB에 저장된 talkingPoints 또는 body에서 받은 talkingPoints 기준으로
      기사 원문(text)을 참고해 쟁점의 근거 여부를 평가
@@ -1871,10 +1770,6 @@ ${issue.title ?? ""}
 
 [이슈 요약]
 ${issue.summary ?? ""}
-
-[좌/우 요약]
-- 진보 요약: ${issue.leftSummary ?? ""}
-- 보수 요약: ${issue.rightSummary ?? ""}
 
 [연결된 기사들(원문 일부)]
 ${articleBlocks.join("\n\n")}
