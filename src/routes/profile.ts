@@ -28,6 +28,11 @@ router.get("/", requireAuth as any, async (req, res) => {
       createdAt: true,
       role: true,
       isAdmin: true,
+
+      // 🔥 온보딩/약관 관련 필드 추가
+      tosAgreedAt: true,
+      privacyAgreedAt: true,
+      marketingAgreed: true,
     },
   });
 
@@ -43,7 +48,14 @@ router.get("/", requireAuth as any, async (req, res) => {
     (user.email ? allowList.includes(user.email.toLowerCase()) : false) ||
     user.isAdmin === true;
 
-  return res.json({ user: { ...user, isAdmin } });
+  return res.json({
+    user: {
+      ...user,
+      isAdmin,
+      // 프론트에서 쓰기 좋은 alias
+      marketingOptIn: user.marketingAgreed ?? false,
+    },
+  });
 });
 
 /**
@@ -86,6 +98,7 @@ router.patch("/", requireAuth as any, async (req, res) => {
 
   if (Array.isArray(interests)) data.interests = interests as any;
 
+  // 🔥 약관 동의 시간 저장
   if (tosAgreedAt) {
     data.tosAgreedAt =
       typeof tosAgreedAt === "string" ? new Date(tosAgreedAt) : new Date();
@@ -96,6 +109,8 @@ router.patch("/", requireAuth as any, async (req, res) => {
         ? new Date(privacyAgreedAt)
         : new Date();
   }
+
+  // 마케팅 수신 동의
   if (typeof marketingOptIn === "boolean")
     data.marketingAgreed = marketingOptIn;
 
@@ -114,6 +129,11 @@ router.patch("/", requireAuth as any, async (req, res) => {
       createdAt: true,
       role: true,
       isAdmin: true,
+
+      // 🔥 여기에도 동일하게 포함
+      tosAgreedAt: true,
+      privacyAgreedAt: true,
+      marketingAgreed: true,
     },
   });
 
@@ -129,7 +149,13 @@ router.patch("/", requireAuth as any, async (req, res) => {
       : false) ||
     updated.isAdmin === true;
 
-  return res.json({ user: { ...updated, isAdmin } });
+  return res.json({
+    user: {
+      ...updated,
+      isAdmin,
+      marketingOptIn: updated.marketingAgreed ?? false,
+    },
+  });
 });
 
 /**
@@ -223,34 +249,17 @@ router.get("/stats", requireAuth as any, async (req, res, next) => {
 /**
  * 🔥 나의 활동 히스토리
  * GET /api/profile/history
- *
- * 반환 형식:
- * { items: ActivityItem[] }
- *
- * ActivityItem:
- * {
- *   id: string;
- *   kind: string;        // ISSUE_VOTE | CLIP_VOTE | AGENDA_LIKE | COMMUNITY_POST_LIKE | ...
- *   parentType: string;  // issue | agenda | clipIssue | community
- *   parentId: string;
- *   title: string;
- *   snippet?: string;
- *   createdAt: string;   // ISO
- * }
  */
 router.get("/history", requireAuth as any, async (req, res, next) => {
   try {
     const userId = (req as any).userId as string | undefined;
     if (!userId) return res.status(401).json({ error: "UNAUTHORIZED" });
 
-    /* --------------------------------------------------
-     * 1) 투표 내역 (Vote)
-     *    parentType = issue | agenda | clipIssue
-     * -------------------------------------------------- */
+    // 이하 기존 코드 그대로
     const voteRows = await prisma.vote.findMany({
       where: { userId },
       orderBy: { createdAt: "desc" },
-      take: 200, // 너무 많아지는 것 방지
+      take: 200,
     });
 
     const voteItems = await Promise.all(
@@ -296,9 +305,6 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
       })
     );
 
-    /* --------------------------------------------------
-     * 2) 좋아요: 아젠다 / 커뮤니티 게시글
-     * -------------------------------------------------- */
     const [agendaLikes, postLikes] = await Promise.all([
       prisma.agendaLike.findMany({
         where: { userId },
@@ -338,9 +344,6 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
       createdAt: l.createdAt.toISOString(),
     }));
 
-    /* --------------------------------------------------
-     * 3) 내가 쓴 아젠다 / 커뮤니티 게시글
-     * -------------------------------------------------- */
     const [myAgendas, myPosts] = await Promise.all([
       prisma.agenda.findMany({
         where: { userId },
@@ -372,9 +375,6 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
       createdAt: p.createdAt.toISOString(),
     }));
 
-    /* --------------------------------------------------
-     * 4) 내가 쓴 댓글 (이슈 / 아젠다 / 뉴스클립 / 커뮤니티)
-     * -------------------------------------------------- */
     const [
       issueComments,
       agendaComments,
@@ -447,9 +447,6 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
       createdAt: c.createdAt.toISOString(),
     }));
 
-    /* --------------------------------------------------
-     * 5) 모두 합치고 createdAt 기준 내림차순 정렬
-     * -------------------------------------------------- */
     const items = [
       ...voteItems,
       ...agendaLikeItems,
@@ -474,6 +471,5 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
     next(err);
   }
 });
-
 
 export default router;
