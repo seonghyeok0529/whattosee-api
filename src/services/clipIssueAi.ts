@@ -431,3 +431,55 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     talkingPoints,
   } as any;
 }
+
+/* -------------------------------------------------------
+ * 6) 클립 이슈 용어 사전만 재생성
+ *  - generateGlossaryText 재사용
+ *  - term + definition 중심 JSON을 glossaryText에 저장
+ * ----------------------------------------------------- */
+export async function refreshClipIssueGlossary(clipIssueId: string) {
+  const issue = await prisma.clipIssue.findUnique({
+    where: { id: clipIssueId },
+    include: {
+      clips: {
+        include: { rawClip: true },
+        take: 18,
+      },
+    },
+  });
+
+  if (!issue) {
+    return null;
+  }
+
+  // LLM이 참고할 클립 목록 텍스트
+  const clipsText = (issue.clips ?? [])
+    .map((ic) => {
+      const ch = ic.rawClip?.channel ?? "채널";
+      const t = ic.rawClip?.title ?? "(제목 없음)";
+      return `- [${ch}] ${t}`;
+    })
+    .join("\n");
+
+  // 🔥 여기서 generateGlossaryText 사용 (이슈용과 동일 패턴)
+  const glossaryText = await generateGlossaryText({
+    title: issue.title,
+    summary: issue.aiSummary ?? issue.description ?? null,
+    itemsText: clipsText,
+    locale: "ko",
+    sourceType: "clip", // 클립 이슈라는 정도만 알려주기
+  });
+
+  const updated = await prisma.clipIssue.update({
+    where: { id: clipIssueId },
+    data: {
+      glossaryText,
+    },
+    select: {
+      id: true,
+      glossaryText: true,
+    },
+  });
+
+  return updated;
+}
