@@ -1879,3 +1879,55 @@ ${talkingPointsJson}
     }
   }
 );
+/* ─────────────────────────────────────────────
+   12. 이슈 AI 제목만 재생성
+   POST /api/admin/issues/:id/refresh-title
+───────────────────────────────────────────── */
+adminIssueRoutes.post(
+  "/issues/:id/refresh-title",
+  requireAuth,
+  adminAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const { id } = req.params;
+
+      const issue = await prisma.issue.findUnique({
+        where: { id },
+        include: { sources: true },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      // 🔹 기존 generateIssueTitle 재사용
+      let newTitle: string | undefined;
+      try {
+        const aiTitle = await generateIssueTitle(issue as any);
+        if (aiTitle?.trim()?.length) {
+          newTitle = aiTitle.trim();
+        }
+      } catch (e) {
+        console.error("[refresh-title] 제목 생성 실패:", e);
+      }
+
+      // 새 제목 못 만들었으면 그냥 기존 이슈 그대로 반환
+      if (!newTitle) {
+        return res.json({ ok: true, item: issue });
+      }
+
+      const updated = await prisma.issue.update({
+        where: { id },
+        data: {
+          title: newTitle,
+        },
+      });
+
+      return res.json({ ok: true, item: updated });
+    } catch (err) {
+      console.error("refresh-title error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
+    }
+  }
+);
+
