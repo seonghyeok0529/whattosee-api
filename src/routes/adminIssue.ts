@@ -575,6 +575,7 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
           r.url,
           {
             id: String(r.id),
+            url: r.url,
             publishedAt: r.publishedAt,
             text: r.text,
             outlet: r.outlet,
@@ -588,23 +589,31 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
     // 3) 프론트에서 쓰기 좋은 Article 형태로 변환
     const articles = issue.sources.map((s) => {
       const raw = s.url ? rawByUrl.get(s.url) : undefined;
+
+      // ✅ URL 우선: 없으면 raw.url, 그것도 없으면 빈 문자열
+      const url = s.url ?? raw?.url ?? "";
+
       const publishedAt =
         raw?.publishedAt ??
         s.createdAt ??
         new Date(); // 최소한 날짜 하나는 보장
 
       return {
-        id: String(s.id),
+        // ✅ 프론트 키 용도로만 사용 (실제 동기화는 url 기반)
+        id: url || String(s.id),
         title: raw?.title ?? s.title ?? "(제목 없음)",
         source: raw?.outlet ?? s.outlet ?? "언론",
         date: publishedAt.toISOString().slice(0, 10),
-        url: s.url,
+        url,
         summary: "", // 필요하면 raw.text 일부 잘라서 넣어도 됨
         keywords: [] as string[],
       };
     });
 
-    const articleIds = articles.map((a) => String(a.id));
+    // ✅ articleIds = 항상 "URL 리스트"로 내려줌
+    const articleIds = articles
+      .map((a) => a.url)
+      .filter((u): u is string => !!u && u.trim().length > 0);
 
     // 4) 연관 이슈(flat 구조로 변환)
     const relationsFrom = issue.relatedFrom.map((rel) => ({
@@ -652,9 +661,9 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
         glossaryText: issue.glossaryText ?? null,
 
         articles,
-        articleIds,
+        articleIds,      // 🔥 이제 항상 URL 배열
         relatedIssues,
-        talkingPoints, // 🔹 여기!
+        talkingPoints,
       },
     });
   } catch (err) {
@@ -662,6 +671,7 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
     return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }
 });
+
 
 
 /* ─────────────────────────────────────────────
