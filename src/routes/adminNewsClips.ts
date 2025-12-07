@@ -9,7 +9,9 @@ import {
 import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
 
-import { refreshClipIssueAIFields } from "../services/clipIssueAi";
+import { refreshClipIssueAIFields, 
+        refreshClipIssueGlossary, 
+} from "../services/clipIssueAi";
 import { OpenAI } from "openai";
 
 const router = Router();
@@ -1059,112 +1061,14 @@ router.post(
     try {
       const { id } = req.params as { id: string };
 
-      // 1) 클립 이슈 기본 정보만 가져오기 (관계 X)
-      const issue = await prisma.clipIssue.findUnique({
-        where: { id },
-      });
+      const updated = await refreshClipIssueGlossary(id);
 
-      if (!issue) {
+      if (!updated) {
         return res
           .status(404)
           .json({ ok: false, error: "Clip issue not found" });
       }
 
-      const title = issue.title ?? "";
-      const description = issue.description ?? "";
-      const aiSummary = issue.aiSummary ?? "";
-      const leftSummary =
-        issue.progressiveSummary ?? issue.leftSummary ?? "";
-      const rightSummary =
-        issue.conservativeSummary ?? issue.rightSummary ?? "";
-
-      // 2) 이슈용 용어 사전과 “동일 패턴”의 프롬프트
-      const systemPrompt = `
-너는 한국 정치·사회 뉴스를 처음 접하는 사람들을 위한 "용어 사전"을 만드는 에디터야.
-
-주어진 이슈의 제목, 설명, 요약을 보고
-관련 뉴스를 볼 때 자주 등장하는 핵심 용어들을 골라서
-JSON 배열 형식의 용어 사전을 만들어라.
-
-반드시 아래와 같은 JSON 배열만 출력한다. (다른 문장/설명 금지)
-
-[
-  {
-    "term": "예산안",
-    "definition": "정부가 1년 동안 쓸 돈의 계획을 의미합니다.",
-    "example": "정부는 내년도 예산안을 국회에 제출했다.",
-    "relatedTerms": ["국가재정", "세수"]
-  }
-]
-
-- term: 용어 이름 (짧고 명확하게, 한글 위주)
-- definition: 일반인이 이해하기 쉬운 설명 (1~2문장)
-- example: 실제 뉴스에서 쓸 수 있을 법한 예문 1개
-- relatedTerms: 연관 용어 목록 (없으면 빈 배열 [])
-
-규칙:
-1. 용어 수는 5~15개 정도로 만든다.
-2. 사건/쟁점 전체 문장을 term으로 쓰지 말고, "단어/짧은 구"만 term으로 사용한다.
-3. 정치, 경제, 사회에서 자주 쓰이는 용어 위주로 고른다.
-4. 모든 내용은 한국어로 작성한다.
-      `.trim();
-
-      const userPrompt = `
-[이슈 제목]
-${title}
-
-[이슈 설명]
-${description}
-
-[AI 요약]
-${aiSummary}
-
-[진보 성향 요약]
-${leftSummary}
-
-[보수 성향 요약]
-${rightSummary}
-      `.trim();
-
-      // 3) OpenAI 호출
-      const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.3,
-      });
-
-      const rawText = completion.choices[0]?.message?.content ?? "[]";
-
-      // 4) JSON 형식 최소 검증
-      let glossaryText = rawText.trim();
-      try {
-        const parsed = JSON.parse(glossaryText);
-        const normalized = Array.isArray(parsed) ? parsed : [parsed];
-        glossaryText = JSON.stringify(normalized, null, 2);
-      } catch (e) {
-        console.error(
-          "[refresh-glossary clips] JSON parse error, raw text 그대로 저장:",
-          e
-        );
-        // 파싱 실패해도 문자열 그대로 저장 (프론트에서 그냥 텍스트로 보여줄 수 있게)
-      }
-
-      // 5) DB 업데이트
-      const updated = await prisma.clipIssue.update({
-        where: { id },
-        data: {
-          glossaryText,
-        },
-        select: {
-          id: true,
-          glossaryText: true,
-        },
-      });
-
-      // 6) 이슈 glossary와 동일한 응답 형태
       return res.json({
         ok: true,
         item: decodeObject({
@@ -1180,7 +1084,6 @@ ${rightSummary}
     }
   }
 );
-
 
 
 export default router;
