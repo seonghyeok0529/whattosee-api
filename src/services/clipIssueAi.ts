@@ -296,83 +296,14 @@ ${clipLines}
 }
 
 /* -------------------------------------------------------
- * 4) 좌/우 프레임 요약 (선택 유지)
- *  - "내용 요약"이 아니라, 성향별 전형적 관점/프레임 설명
- *  - 클립 2개 이상 있을 때만 생성
- * ----------------------------------------------------- */
-export async function generateClipIssueSideSummary(
-  clipIssueId: string,
-  side: "left" | "right"
-) {
-  const clips = await prisma.clipIssueClip.findMany({
-    where: { clipIssueId, side },
-    include: { rawClip: true },
-    take: 15,
-  });
-
-  if (clips.length < 2) {
-    return "";
-  }
-
-  const sideLabel = side === "left" ? "진보" : "보수";
-
-  const list = clips
-    .map((c, i) => {
-      const channel = c.rawClip?.channel ?? "채널";
-      const title = c.rawClip?.title ?? "(제목 없음)";
-      return `[${i + 1}] (${channel}) ${title}`;
-    })
-    .filter(Boolean)
-    .join("\n");
-
-  const clippedList = take(list, 3500);
-
-  const prompt = `
-다음은 모두 "${sideLabel} 성향"으로 분류된 유튜브/방송 뉴스 클립들이다.
-제목과 채널 정보를 단서로, "${sideLabel} 성향"이 이 이슈를 바라볼 때
-일반적으로 취할 수 있는 전형적인 관점과 논조를 2~3문장으로 정리하라.
-
-주의:
-- 실제 영상을 본 것처럼 구체적인 발언이나 장면을 인용하지 말 것
-- 개별 클립의 내용을 요약하려 하지 말고, "${sideLabel} 성향" 채널들이
-  이와 같은 이슈에서 보이는 전형적인 해석 틀(프레임)을 설명할 것
-- 입력된 제목 문장을 그대로 반복하지 말고, 새로운 문장으로 작성할 것
-- 상대 진영을 공격하거나 조롱하는 표현은 피하고, 분석적으로 서술할 것
-
-클립 제목 & 채널 목록:
-${clippedList}
-
-출력 형식:
-- 2~3문장 분량의 한글 문단 하나
-- "${sideLabel}" 성향이 이 이슈를 어떤 관점/우려/강조점으로 보는지를 설명
-  `.trim();
-
-  const r = await openai.chat.completions.create({
-    model: DEFAULT_MODEL,
-    temperature: 0.3,
-    messages: [
-      {
-        role: "system",
-        content:
-          "너는 뉴스 논조와 이념적 프레임을 분석하는 전문가다. 특정 클립의 내용을 요약하는 대신, 성향별 전형적 관점을 설명해야 한다.",
-      },
-      { role: "user", content: prompt },
-    ],
-  });
-
-  return r.choices?.[0]?.message?.content?.trim() ?? "";
-}
-
-/* -------------------------------------------------------
- * 5) ClipIssue 전체 AI 필드 재생성 (+ glossaryText + talkingPoints)
+ * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText + talkingPoints)
+ *    (좌/우 프레임 요약은 제거)
  * ----------------------------------------------------- */
 export async function refreshClipIssueAIFields(clipIssueId: string) {
-  // 제목 / 요약 / 좌·우 프레임 요약 병렬 생성
-  const [title, aiSummary, progressive, conservative] = await Promise.all([
+  // 제목 / 요약 병렬 생성
+  const [title, aiSummary] = await Promise.all([
     generateClipIssueTitle(clipIssueId),
     generateClipIssueSummary(clipIssueId),
-    generateClipIssueSideSummary(clipIssueId, "left"),
-    generateClipIssueSideSummary(clipIssueId, "right"),
   ]);
 
   // 1차 업데이트: 기본 AI 필드 + 클립 목록 로드
@@ -381,8 +312,6 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     data: {
       title,
       aiSummary,
-      progressiveSummary: progressive || null,
-      conservativeSummary: conservative || null,
     },
     include: {
       clips: {
@@ -433,9 +362,8 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
 }
 
 /* -------------------------------------------------------
- * 6) 클립 이슈 용어 사전만 재생성
+ * 5) 클립 이슈 용어 사전만 재생성
  *  - generateGlossaryText 재사용
- *  - term + definition 중심 JSON을 glossaryText에 저장
  * ----------------------------------------------------- */
 export async function refreshClipIssueGlossary(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
@@ -461,13 +389,12 @@ export async function refreshClipIssueGlossary(clipIssueId: string) {
     })
     .join("\n");
 
-  // 🔥 여기서 generateGlossaryText 사용 (이슈용과 동일 패턴)
   const glossaryText = await generateGlossaryText({
     title: issue.title,
     summary: issue.aiSummary ?? issue.description ?? null,
     itemsText: clipsText,
     locale: "ko",
-    sourceType: "clip", // 클립 이슈라는 정도만 알려주기
+    sourceType: "clip",
   });
 
   const updated = await prisma.clipIssue.update({
