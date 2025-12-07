@@ -470,7 +470,7 @@ router.get(
 /**
  * POST /api/admin/news-clips/issues
  * 클립 이슈 생성
- * body: { title, description, aiSummary, isHot, clipIds, leftSummary?, rightSummary?, fromClusterId?, glossaryText? }
+ * body: { title, description, aiSummary, isHot, clipIds, fromClusterId?, glossaryText? }
  */
 router.post(
   "/news-clips/issues",
@@ -484,8 +484,6 @@ router.post(
         aiSummary?: string | null;
         isHot?: boolean;
         clipIds?: string[];
-        leftSummary?: string | null;
-        rightSummary?: string | null;
         fromClusterId?: string | null;
         glossaryText?: string | null;
         talkingPoints?: IncomingTalkingPoint[];
@@ -497,8 +495,6 @@ router.post(
         aiSummary,
         isHot,
         clipIds,
-        leftSummary,
-        rightSummary,
         fromClusterId,
         glossaryText,
         talkingPoints,
@@ -535,8 +531,6 @@ router.post(
           isHot: !!isHot,
           clipCount: clipIds.length,
           totalViews: 0,
-          progressiveSummary: leftSummary ?? null,
-          conservativeSummary: rightSummary ?? null,
           glossaryText: glossaryText ?? null,
           clips: {
             create: rawClipsInIssue.map((c) => ({
@@ -608,8 +602,6 @@ router.patch(
         aiSummary?: string | null;
         isHot?: boolean;
         clipIds?: string[];
-        leftSummary?: string | null;
-        rightSummary?: string | null;
         glossaryText?: string | null;
         talkingPoints?: IncomingTalkingPoint[];
       };
@@ -620,8 +612,6 @@ router.patch(
         aiSummary,
         isHot,
         clipIds,
-        leftSummary,
-        rightSummary,
         glossaryText,
         talkingPoints,
       } = body;
@@ -643,8 +633,6 @@ router.patch(
         aiSummary: aiSummary ?? null,
         isHot: !!isHot,
         clipCount: clipIdsSafe.length,
-        progressiveSummary: leftSummary ?? null,
-        conservativeSummary: rightSummary ?? null,
         glossaryText: glossaryText ?? null,
         clips: {
           deleteMany: {}, // 이전 연결 전부 제거
@@ -807,12 +795,6 @@ ${issue.description ?? ""}
 
 [AI 요약]
 ${issue.aiSummary ?? ""}
-
-[진보 성향 요약]
-${issue.progressiveSummary ?? ""}
-
-[보수 성향 요약]
-${issue.conservativeSummary ?? ""}
 
 [포함된 클립 목록]
 ${clipsSummary || "(클립 정보 없음)"}
@@ -1002,48 +984,11 @@ router.post(
         ok: true,
         item: decodeObject({
           aiSummary: updated.aiSummary ?? null,
-          leftSummary: updated.progressiveSummary ?? null,
-          rightSummary: updated.conservativeSummary ?? null,
         } as Record<string, any>),
       });
     } catch (err) {
       console.error(
         "❌ [POST /api/admin/news-clips/issues/:id/refresh-summary] error:",
-        err
-      );
-      next(err);
-    }
-  }
-);
-
-// 🔄 진영별 요약만 재생성
-// POST /api/admin/news-clips/issues/:id/refresh-side-summary
-router.post(
-  "/news-clips/issues/:id/refresh-side-summary",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const { id } = req.params as { id: string };
-
-      const updated = await refreshClipIssueAIFields(id);
-
-      if (!updated) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Clip issue not found" });
-      }
-
-      res.json({
-        ok: true,
-        item: decodeObject({
-          leftSummary: updated.progressiveSummary ?? null,
-          rightSummary: updated.conservativeSummary ?? null,
-        } as Record<string, any>),
-      });
-    } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/news-clips/issues/:id/refresh-side-summary] error:",
         err
       );
       next(err);
