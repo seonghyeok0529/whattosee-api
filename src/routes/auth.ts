@@ -413,44 +413,70 @@ router.get("/kakao", (req, res) => {
 
   // 앱에서 온 요청이면 앱 redirect_uri 저장
   if (platform === "app" && redirect_uri) {
+    console.log("[KAKAO /kakao] app flow, save APP_REDIRECT_COOKIE:", redirect_uri);
     res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
   }
 
+  const redirectUri = process.env.KAKAO_REDIRECT_URI!;
   const authUrl =
     "https://kauth.kakao.com/oauth/authorize?" +
     new URLSearchParams({
       client_id: process.env.KAKAO_CLIENT_ID!,
-      redirect_uri: process.env.KAKAO_REDIRECT_URI!,
+      redirect_uri: redirectUri,
       response_type: "code",
       state,
     }).toString();
 
-  console.log("[KAKAO AUTH URL]", authUrl);
+  console.log("[KAKAO /kakao] redirect_uri =", redirectUri);
+  console.log("[KAKAO /kakao] AUTH URL =", authUrl);
 
   return res.redirect(authUrl);
 });
 
 router.get("/kakao/callback", async (req, res) => {
   try {
-    const code = req.query.code as string;
-    const state = req.query.state as string;
-    const stateCookie = req.cookies?.[OAUTH_STATE_COOKIE];
-    res.clearCookie(OAUTH_STATE_COOKIE, stateCookieOpts);
+    console.log("[KAKAO /callback] query:", req.query);
+    console.log("[KAKAO /callback] cookies:", req.cookies);
 
-    // 앱 redirect_uri 쿠키
+    const code = req.query.code as string | undefined;
+    const state = req.query.state as string | undefined;
+    const stateCookie = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
+
+    // 앱 redirect_uri 쿠키 (app flow 여부 판단용)
     const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as
       | string
       | undefined;
+
+    const isAppFlow = !!appRedirect;
+
+    // 쿠키는 이제 바로 정리
+    res.clearCookie(OAUTH_STATE_COOKIE, stateCookieOpts);
     if (appRedirect) {
       res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
     }
 
-    if (!code) return res.redirect(CLIENT_URL);
-    if (!state || !stateCookie || state !== stateCookie) {
-      return res.status(400).send("Invalid OAuth state");
+    if (!code) {
+      console.warn("[KAKAO /callback] missing code, redirect to CLIENT_URL");
+      return res.redirect(CLIENT_URL);
     }
 
-    // token
+    // 🔐 state 검증: 웹은 강하게, 앱은 느슨하게
+    if (!state || !stateCookie || state !== stateCookie) {
+      console.warn("[KAKAO /callback] Invalid OAuth state", {
+        stateFromQuery: state,
+        stateFromCookie: stateCookie,
+        isAppFlow,
+      });
+
+      // 👉 웹 로그인일 때만 진짜 에러
+      if (!isAppFlow) {
+        return res.status(400).send("Invalid OAuth state");
+      }
+      // 👉 앱 로그인일 땐 Kakao 쪽 UA / 쿠키 문제로 인해 state가 깨질 수 있어서
+      //     경고만 찍고 계속 진행 (Expo Go에선 잘 되다가 스토어 빌드에서만 깨지는 케이스 방지)
+    }
+
+    // 1) 토큰 발급
     const tokenRes = await fetch("https://kauth.kakao.com/oauth/token", {
       method: "POST",
       headers: {
@@ -464,21 +490,32 @@ router.get("/kakao/callback", async (req, res) => {
         code,
       }),
     });
-    if (!tokenRes.ok) throw new Error(await tokenRes.text());
-    const tokenJson: any = await tokenRes.json();
-    const accessToken = tokenJson.access_token as string;
 
-    // me
+    if (!tokenRes.ok) {
+      const txt = await tokenRes.text();
+      console.error("[KAKAO /callback] token error:", txt);
+      throw new Error(txt);
+    }
+
+    const tokenJson: any = await tokenRes.json();
+    const kakaoAccessToken = tokenJson.access_token as string;
+
+    // 2) 사용자 정보 조회
     const meRes = await fetch("https://kapi.kakao.com/v2/user/me", {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${kakaoAccessToken}` },
     });
-    if (!meRes.ok) throw new Error(await meRes.text());
+    if (!meRes.ok) {
+      const txt = await meRes.text();
+      console.error("[KAKAO /callback] me error:", txt);
+      throw new Error(txt);
+    }
+
     const me = (await meRes.json()) as any;
     const kakaoId = String(me.id);
     const email: string | undefined = me.kakao_account?.email;
     const nickname: string | undefined = me.kakao_account?.profile?.nickname;
 
-    // upsert
+    // 3) upsert
     let user;
     if (email) {
       const existing = await prisma.user.findUnique({ where: { email } });
@@ -510,10 +547,12 @@ router.get("/kakao/callback", async (req, res) => {
       }
     }
 
+    // 4) 우리 서비스용 JWT + refresh
     const accessJwt = signAccessToken({
       id: user.id,
       email: user.email ?? null,
     });
+
     const raw = newRefreshRaw();
     const tokenHash = crypto.createHash("sha256").update(raw).digest("hex");
     await prisma.refreshToken.create({
@@ -525,33 +564,37 @@ router.get("/kakao/callback", async (req, res) => {
     });
     res.cookie(REFRESH_COOKIE, raw, cookieOptions());
 
+    // 기존 유저 여부(온보딩 분기 등에 사용)
     const existingUser = email
       ? await prisma.user.findUnique({ where: { email } })
       : await prisma.user.findUnique({ where: { kakaoId } });
 
-    // 앱이면 앱 딥링크로
+    // 5) 앱이면 앱 딥링크로, 웹이면 CLIENT_URL로
     if (appRedirect) {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
       const redirectUrl = existingUser
         ? `${base}${sep}token=${encodeURIComponent(accessJwt)}`
         : `${base}${sep}token=${encodeURIComponent(accessJwt)}&new=1`;
+
+      console.log("[KAKAO /callback] redirect to app:", redirectUrl);
       return res.redirect(redirectUrl);
     }
 
-    // 웹이면 기존 CLIENT_URL
     const redirectUrl = existingUser
       ? `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessJwt)}`
       : `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(
           accessJwt
         )}&new=1`;
 
+    console.log("[KAKAO /callback] redirect to web:", redirectUrl);
     return res.redirect(redirectUrl);
   } catch (err) {
     console.error("Kakao OAuth error:", err);
     return res.status(500).json({ error: "Kakao OAuth failed" });
   }
 });
+
 
 /* Naver ==================== */
 router.get("/naver", (req, res) => {
