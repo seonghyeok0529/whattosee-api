@@ -7,13 +7,11 @@ import {
   ClusterSuggestionStatus,
   UserStatus,
 } from "@prisma/client";
-import { IssueStatus as PrismaIssueStatus } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
 import { generateIssueSummary } from "../services/generateIssueSummary";
 import { generateIssueTitle } from "../services/generateIssueTitle";
 import { OpenAI } from "openai";
-import { generateSideSummary } from "../services/generateSideSummary";
 import { refreshIssueGlossary } from "../services/issueGlossary";
 
 const openai = new OpenAI({
@@ -22,7 +20,9 @@ const openai = new OpenAI({
 
 export const adminIssueRoutes = Router();
 
-// 🔧 articleIds = URL 배열을 기준으로 Issue.sources 동기화
+/* ─────────────────────────────────────────────
+   🔧 articleIds = URL 배열을 기준으로 Issue.sources 동기화
+───────────────────────────────────────────── */
 async function syncIssueSourcesByUrls(issueId: string, articleIds?: string[]) {
   if (!Array.isArray(articleIds)) return;
 
@@ -33,8 +33,9 @@ async function syncIssueSourcesByUrls(issueId: string, articleIds?: string[]) {
         .filter((u) => u.length > 0)
     )
   );
+
   if (urls.length === 0) {
-    // 선택 기사 없으면 이 이슈의 sources 비우기 (정책 맞게)
+    // 선택 기사 없으면 이 이슈의 sources 비우기
     await prisma.source.deleteMany({ where: { issueId } });
     return;
   }
@@ -64,7 +65,8 @@ async function syncIssueSourcesByUrls(issueId: string, articleIds?: string[]) {
     const raw = rawByUrl.get(url);
 
     await prisma.source.upsert({
-      where: { url }, // 🔐 Source.url 이 unique 라는 가정 (이미 approve 로직도 이렇게 사용 중)
+      // ⚠️ Source.url 이 unique 라는 가정
+      where: { url },
       update: {
         issueId,
         outlet: raw?.outlet ?? "언론",
@@ -93,7 +95,9 @@ function sanitizeTalkingPoints(items?: IncomingTalkingPoint[] | null) {
   if (!Array.isArray(items) || items.length === 0) return null;
 
   const cleaned = items
-    .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+    .filter(
+      (i) => i && typeof i.title === "string" && typeof i.body === "string"
+    )
     .map((i, idx) => ({
       order: typeof i.order === "number" ? i.order : idx + 1,
       title: String(i.title).slice(0, 100),
@@ -103,7 +107,6 @@ function sanitizeTalkingPoints(items?: IncomingTalkingPoint[] | null) {
 
   return cleaned.length ? cleaned : null;
 }
-
 
 /* ─────────────────────────────────────────────
    Helper: status 매핑 (소문자/대문자 둘 다 허용)
@@ -134,7 +137,6 @@ adminIssueRoutes.get(
   requireAuth,
   adminAuth,
   async (req: Request, res: Response) => {
-    // 🔹 statusRaw 로 받아서 toIssueStatus 로 매핑
     const statusRaw = (req.query.status as string | undefined)?.trim();
     const q = (req.query.q as string | undefined)?.trim() ?? "";
     const sort = (req.query.sort as string | undefined) || "latest";
@@ -145,7 +147,6 @@ adminIssueRoutes.get(
     const where: Prisma.IssueWhereInput = {};
 
     if (statusRaw && statusRaw.toUpperCase() !== "ALL") {
-      // "draft" / "published" / "PUBLISH" / "ARCHIVE" 전부 허용
       where.status = toIssueStatus(statusRaw);
     }
 
@@ -216,23 +217,18 @@ adminIssueRoutes.get("/issues/search", async (req, res) => {
 
     const where: any = {};
 
-    // 🔍 검색어: SQLite에서는 mode: "insensitive" 지원 안 하므로 제거
     if (q) {
       where.OR = [{ title: { contains: q } }, { summary: { contains: q } }];
     }
 
-    // 🔹 상태 필터
     if (status && status !== "all") {
-      // 프론트는 "draft/published/archived/suggested" 소문자 문자열을 보냄
       const map: Record<string, IssueStatus> = {
         draft: IssueStatus.DRAFT,
         published: IssueStatus.PUBLISHED,
         archived: IssueStatus.ARCHIVED,
         suggested: IssueStatus.SUGGESTED,
       };
-      if (map[status]) {
-        where.status = map[status];
-      }
+      if (map[status]) where.status = map[status];
     }
 
     const issues = await prisma.issue.findMany({
@@ -261,7 +257,7 @@ adminIssueRoutes.get("/issues/search", async (req, res) => {
         id: i.id,
         title: i.title,
         summary: i.summary,
-        status: i.status, // 필요하면 String(i.status).toLowerCase() 로 바꿔도 됨
+        status: i.status,
         createdAt: i.createdAt,
         updatedAt: i.updatedAt,
         articlesCount: sourcesCount,
@@ -270,11 +266,7 @@ adminIssueRoutes.get("/issues/search", async (req, res) => {
       };
     });
 
-    res.json({
-      ok: true,
-      items,
-      nextCursor: null,
-    });
+    res.json({ ok: true, items, nextCursor: null });
   } catch (e: any) {
     console.error("GET /api/admin/issues/search error", e);
     res.status(500).json({
@@ -313,21 +305,15 @@ adminIssueRoutes.post(
         where: {
           status: ClusterSuggestionStatus.PENDING,
           issueId: null,
-          createdAt: {
-            gte: fromDate,
-          },
+          createdAt: { gte: fromDate },
         },
         orderBy: { createdAt: "desc" },
         take: takeLimit,
-        include: {
-          articles: true,
-        },
+        include: { articles: true },
       });
 
       const minCount =
-        typeof minArticles === "number" && minArticles > 0
-          ? minArticles
-          : 2;
+        typeof minArticles === "number" && minArticles > 0 ? minArticles : 2;
 
       const filtered = suggestions.filter(
         (s) => (s.articles?.length ?? 0) >= minCount
@@ -336,27 +322,23 @@ adminIssueRoutes.post(
       const createdIssueIds: string[] = [];
 
       for (const sug of filtered) {
-        // 1) 이슈 생성 (일단 status는 DRAFT)
         const issue = await prisma.issue.create({
           data: {
             title: sug.title ?? "(제목 없음)",
             summary: sug.summary ?? null,
-            tags: [], // 필요하면 키워드 매핑
+            tags: [],
             status: IssueStatus.DRAFT,
           },
         });
 
         createdIssueIds.push(issue.id);
 
-        // 2) 기사 URL 리스트 추출
         const articleUrls = (sug.articles ?? [])
           .map((a) => (a.url ?? "").trim())
           .filter((u) => u.length > 0);
 
-        // 3) Source 동기화
         await syncIssueSourcesByUrls(issue.id, articleUrls);
 
-        // 4) clusterSuggestion 상태 업데이트 (APPROVED + issueId 연결)
         await prisma.clusterSuggestion.update({
           where: { id: sug.id },
           data: {
@@ -365,7 +347,6 @@ adminIssueRoutes.post(
           },
         });
 
-        // 5) 제목/요약 AI로 한 번 더 다듬기 (실패해도 전체 플로우는 계속)
         try {
           const fullIssue = await prisma.issue.findUnique({
             where: { id: issue.id },
@@ -379,9 +360,7 @@ adminIssueRoutes.post(
             await prisma.issue.update({
               where: { id: issue.id },
               data: {
-                ...(aiTitle?.trim()?.length
-                  ? { title: aiTitle.trim() }
-                  : {}),
+                ...(aiTitle?.trim()?.length ? { title: aiTitle.trim() } : {}),
                 ...(aiSummary?.trim()?.length
                   ? { summary: aiSummary.trim() }
                   : {}),
@@ -389,10 +368,7 @@ adminIssueRoutes.post(
             });
           }
         } catch (e) {
-          console.error(
-            "[/api/admin/issues/auto-generate] AI 생성 실패:",
-            e
-          );
+          console.error("[/api/admin/issues/auto-generate] AI 생성 실패:", e);
         }
       }
 
@@ -402,10 +378,7 @@ adminIssueRoutes.post(
         issueIds: createdIssueIds,
       });
     } catch (e: any) {
-      console.error(
-        "[POST /api/admin/issues/auto-generate] error:",
-        e
-      );
+      console.error("[POST /api/admin/issues/auto-generate] error:", e);
       return res.status(500).json({
         ok: false,
         error: "INTERNAL_ERROR",
@@ -416,7 +389,7 @@ adminIssueRoutes.post(
 );
 
 /* ─────────────────────────────────────────────
-   3. 추천 이슈 목록 (IssuesTab "추천 이슈" 탭용)
+   3. 추천 이슈 목록
    GET /api/admin/issues/recommended
 ───────────────────────────────────────────── */
 adminIssueRoutes.get(
@@ -424,8 +397,6 @@ adminIssueRoutes.get(
   requireAuth,
   adminAuth,
   async (req: Request, res: Response) => {
-    // 🔹 클라이언트에서 ?take= 를 넘기면 사용하고, 없으면 100
-    //    최대 10,000까지 허용
     const takeRaw = parseInt((req.query.take as string) ?? "100", 10);
     const take = Math.min(isNaN(takeRaw) ? 100 : takeRaw, 10000);
 
@@ -436,14 +407,11 @@ adminIssueRoutes.get(
         orderBy: { createdAt: "desc" },
         include: {
           articles: {
-            include: {
-              raw: true, // 🔵 rawArticle 같이 로드
-            },
+            include: { raw: true },
           },
         },
       });
 
-      // 🔹 기사 2개 이상인 추천 이슈만 필터링
       const filtered = suggestions.filter(
         (sug) => (sug.articles?.length ?? 0) >= 2
       );
@@ -451,7 +419,6 @@ adminIssueRoutes.get(
       const items = filtered.map((sug) => {
         const articles = sug.articles ?? [];
 
-        // 날짜 범위 계산
         let minDate: Date | null = null;
         let maxDate: Date | null = null;
         for (const a of articles) {
@@ -468,7 +435,6 @@ adminIssueRoutes.get(
                 .slice(0, 10)}`
             : "";
 
-        // 키워드: summary를 공백/쉼표 기준으로 잘라 상위 8개
         const keywords =
           (sug.summary ?? "")
             .split(/[,\s]+/)
@@ -489,7 +455,7 @@ adminIssueRoutes.get(
             const rawDate = a.publishedAt ?? raw?.publishedAt ?? null;
 
             return {
-              id: url || String(raw?.id ?? a.id), // ✅ ID = URL
+              id: url || String(raw?.id ?? a.id),
               title: a.title ?? raw?.title ?? "(제목 없음)",
               source: a.outlet ?? raw?.outlet ?? "언론",
               date: rawDate ? rawDate.toISOString().slice(0, 10) : "",
@@ -501,7 +467,6 @@ adminIssueRoutes.get(
         };
       });
 
-      // 🔹 페이지네이션 안 쓰니까 nextCursor는 항상 null
       res.json({ ok: true, items, nextCursor: null });
     } catch (e) {
       console.error("[admin/issues/recommended] error:", e);
@@ -513,7 +478,6 @@ adminIssueRoutes.get(
 /* ─────────────────────────────────────────────
    4. 이슈 상세 (관리자용)
    GET /api/admin/issues/:id
-   - 연관 이슈 + 포함 기사(AdminArticle 형태) 반환
 ───────────────────────────────────────────── */
 adminIssueRoutes.get("/issues/:id", async (req, res) => {
   try {
@@ -538,7 +502,6 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
         relatedTo: {
           include: { from: true },
         },
-        // 🔹 쟁점 리스트 포함
         talkingPoints: {
           orderBy: { order: "asc" },
         },
@@ -549,12 +512,10 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
       return res.status(404).json({ ok: false, error: "NOT_FOUND" });
     }
 
-    // 1) Source.url 목록 추출
     const urls = issue.sources
       .map((s) => s.url)
       .filter((u): u is string => !!u && u.trim().length > 0);
 
-    // 2) URL 기준으로 rawArticle 조회
     let rawByUrl = new Map<string, any>();
     if (urls.length > 0) {
       const raws = await prisma.rawArticle.findMany({
@@ -586,36 +547,27 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
       );
     }
 
-    // 3) 프론트에서 쓰기 좋은 Article 형태로 변환
     const articles = issue.sources.map((s) => {
       const raw = s.url ? rawByUrl.get(s.url) : undefined;
-
-      // ✅ URL 우선: 없으면 raw.url, 그것도 없으면 빈 문자열
       const url = s.url ?? raw?.url ?? "";
 
-      const publishedAt =
-        raw?.publishedAt ??
-        s.createdAt ??
-        new Date(); // 최소한 날짜 하나는 보장
+      const publishedAt = raw?.publishedAt ?? s.createdAt ?? new Date();
 
       return {
-        // ✅ 프론트 키 용도로만 사용 (실제 동기화는 url 기반)
         id: url || String(s.id),
         title: raw?.title ?? s.title ?? "(제목 없음)",
         source: raw?.outlet ?? s.outlet ?? "언론",
         date: publishedAt.toISOString().slice(0, 10),
         url,
-        summary: "", // 필요하면 raw.text 일부 잘라서 넣어도 됨
+        summary: "",
         keywords: [] as string[],
       };
     });
 
-    // ✅ articleIds = 항상 "URL 리스트"로 내려줌
     const articleIds = articles
       .map((a) => a.url)
       .filter((u): u is string => !!u && u.trim().length > 0);
 
-    // 4) 연관 이슈(flat 구조로 변환)
     const relationsFrom = issue.relatedFrom.map((rel) => ({
       id: rel.to.id,
       title: rel.to.title ?? "",
@@ -640,7 +592,6 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
 
     const relatedIssues = [...relationsFrom, ...relationsTo];
 
-    // 5) 쟁점 리스트(Talking Points) 변환
     const talkingPoints = issue.talkingPoints.map((tp) => ({
       id: String(tp.id),
       order: tp.order ?? 0,
@@ -661,7 +612,7 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
         glossaryText: issue.glossaryText ?? null,
 
         articles,
-        articleIds,      // 🔥 이제 항상 URL 배열
+        articleIds,
         relatedIssues,
         talkingPoints,
       },
@@ -671,8 +622,6 @@ adminIssueRoutes.get("/issues/:id", async (req, res) => {
     return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
   }
 });
-
-
 
 /* ─────────────────────────────────────────────
    5. 이슈 생성 + AI 자동 요약/제목 생성
@@ -691,7 +640,7 @@ adminIssueRoutes.post(
         articleIds,
         keywords,
         fromSuggestionId,
-        talkingPoints, // 👈 추가
+        talkingPoints,
       } = req.body as {
         title?: string;
         summary?: string;
@@ -699,12 +648,11 @@ adminIssueRoutes.post(
         articleIds?: string[];
         keywords?: string[];
         fromSuggestionId?: string | null;
-        talkingPoints?: IncomingTalkingPoint[]; // 👈 추가
+        talkingPoints?: IncomingTalkingPoint[];
       };
 
       const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
 
-      // 1) 일단 빈 값이라도 생성
       const issue = await prisma.issue.create({
         data: {
           title: title?.trim() || "(제목 없음)",
@@ -719,10 +667,8 @@ adminIssueRoutes.post(
         },
       });
 
-      // 2) Source 연결
       await syncIssueSourcesByUrls(issue.id, articleIds);
 
-      // 3) 추천 이슈 승인 처리
       if (fromSuggestionId) {
         try {
           await prisma.clusterSuggestion.update({
@@ -737,9 +683,8 @@ adminIssueRoutes.post(
         }
       }
 
-      // 4) AI 자동 생성 (제목, 요약)
+      // AI 자동 생성 (제목, 요약) - 기존 로직 유지 (비어 있으면만 채우는 형태)
       let finalIssue = issue;
-
       try {
         const fullIssue = await prisma.issue.findUnique({
           where: { id: issue.id },
@@ -754,7 +699,7 @@ adminIssueRoutes.post(
             where: { id: issue.id },
             data: {
               title: title?.trim()?.length
-                ? title.trim() // 사람이 입력한 제목이 있으면 유지
+                ? title.trim()
                 : aiTitle?.trim()?.length
                 ? aiTitle.trim()
                 : fullIssue.title,
@@ -773,6 +718,20 @@ adminIssueRoutes.post(
         console.error("[POST /api/admin/issues] AI 생성 실패:", e);
       }
 
+      // ✅ PUBLISHED로 생성하는 경우: 빈 AI 필드들 자동 채우기(쟁점/용어사전 포함)
+      if (toIssueStatus(status) === IssueStatus.PUBLISHED) {
+        try {
+          await fillAiFieldsIfEmptyOnPublish(issue.id);
+        } catch (e) {
+          console.error("[POST /issues] fillAiFieldsIfEmptyOnPublish failed:", e);
+        }
+        const reloaded = await prisma.issue.findUnique({
+          where: { id: issue.id },
+          include: { talkingPoints: { orderBy: { order: "asc" } } },
+        });
+        return res.json({ ok: true, item: reloaded ?? finalIssue });
+      }
+
       return res.json({ ok: true, item: finalIssue });
     } catch (err) {
       console.error(err);
@@ -784,8 +743,6 @@ adminIssueRoutes.post(
 /* ─────────────────────────────────────────────
    6. 이슈 수정
    PATCH /api/admin/issues/:id
-   body: { title?, summary?, status?, articleIds?, keywords? }
-   - articleIds 전달되면 Source 집합 재구성
 ───────────────────────────────────────────── */
 adminIssueRoutes.patch(
   "/issues/:id",
@@ -793,37 +750,40 @@ adminIssueRoutes.patch(
   adminAuth,
   async (req: Request, res: Response) => {
     const { id } = req.params;
-    const {
-      title,
-      summary,
-      status,
-      articleIds,
-      keywords,
-      talkingPoints,        // 👈 추가
-    } = req.body as {
-      title?: string;
-      summary?: string;
-      status?: string;
-      articleIds?: string[];
-      keywords?: string[];
-      talkingPoints?: IncomingTalkingPoint[]; // 👈 추가
-    };
+    const { title, summary, status, articleIds, keywords, talkingPoints } =
+      req.body as {
+        title?: string;
+        summary?: string;
+        status?: string;
+        articleIds?: string[];
+        keywords?: string[];
+        talkingPoints?: IncomingTalkingPoint[];
+      };
 
     try {
       const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
 
+      // ✅ PUBLISHED 전환 감지 위해 이전 상태 로드
+      const prev = await prisma.issue.findUnique({
+        where: { id },
+        select: { status: true },
+      });
+      if (!prev) {
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
+      }
+
+      const nextStatus =
+        status !== undefined ? toIssueStatus(status) : undefined;
+
       const data: Prisma.IssueUpdateInput = {
         ...(title !== undefined ? { title: title.trim() } : {}),
-        ...(summary !== undefined
-          ? { summary: summary?.trim() ?? null }
-          : {}),
-        ...(status !== undefined ? { status: toIssueStatus(status) } : {}),
+        ...(summary !== undefined ? { summary: summary?.trim() ?? null } : {}),
+        ...(nextStatus !== undefined ? { status: nextStatus } : {}),
         ...(keywords !== undefined
           ? { tags: Array.isArray(keywords) ? keywords : [] }
           : {}),
       };
 
-      // 쟁점이 같이 넘어온 경우에만 덮어쓰기
       if (cleanedTalkingPoints) {
         (data as any).talkingPoints = {
           deleteMany: {},
@@ -840,12 +800,35 @@ adminIssueRoutes.patch(
         await syncIssueSourcesByUrls(id, articleIds);
       }
 
+      // ✅ "PUBLISHED로 전환되는 순간"에만 자동 채우기 실행
+      const becamePublished =
+        nextStatus === IssueStatus.PUBLISHED &&
+        prev.status !== IssueStatus.PUBLISHED;
+
+      if (becamePublished) {
+        try {
+          await fillAiFieldsIfEmptyOnPublish(id);
+        } catch (e) {
+          console.error(
+            "[PATCH /issues/:id] fillAiFieldsIfEmptyOnPublish failed:",
+            e
+          );
+        }
+      }
+
+      // ✅ 전환이 있었으면 최종 값(쟁점 포함) 다시 내려주기
+      if (becamePublished) {
+        const reloaded = await prisma.issue.findUnique({
+          where: { id },
+          include: { talkingPoints: { orderBy: { order: "asc" } } },
+        });
+        return res.json({ ok: true, item: reloaded ?? issue });
+      }
+
       return res.json({ ok: true, item: issue });
     } catch (err) {
       console.error(err);
-      return res
-        .status(500)
-        .json({ ok: false, message: "INTERNAL_ERROR" });
+      return res.status(500).json({ ok: false, message: "INTERNAL_ERROR" });
     }
   }
 );
@@ -870,9 +853,7 @@ adminIssueRoutes.post(
       return res.json({ ok: true, item: updated });
     } catch (err) {
       console.error(err);
-      return res
-        .status(500)
-        .json({ ok: false, message: "INTERNAL_ERROR" });
+      return res.status(500).json({ ok: false, message: "INTERNAL_ERROR" });
     }
   }
 );
@@ -894,14 +875,12 @@ adminIssueRoutes.post(
       direction?: "FROM" | "TO";
     };
 
-    // 기본 검증
     if (!targetIssueId || targetIssueId === id) {
       return res
         .status(400)
         .json({ ok: false, message: "invalid targetIssueId" });
     }
 
-    // direction 에 따라 from/to 뒤집기
     const isToDirection = direction === "TO";
 
     const link = isToDirection
@@ -938,7 +917,7 @@ adminIssueRoutes.post(
       ok: true,
       item: {
         relationId: rel.id,
-        issueId: id, // 현재 편집중인 이슈
+        issueId: id,
         targetIssueId,
         relationType: rel.relationType,
         direction: (direction ?? "FROM") as "FROM" | "TO",
@@ -965,7 +944,7 @@ adminIssueRoutes.delete(
 );
 
 /* ─────────────────────────────────────────────
-   9. 유저 / 인물 / 리포트 / 기사 검색 (기존 로직 유지)
+   9. 유저 / 인물 / 리포트
 ───────────────────────────────────────────── */
 adminIssueRoutes.get(
   "/users",
@@ -988,15 +967,14 @@ adminIssueRoutes.get(
         where,
         take: take + 1,
         orderBy: { createdAt: "desc" },
-        // 🔹 _count 포함해서 댓글/좋아요/투표 수 집계
         include: {
           _count: {
             select: {
-              comments: true, // AgendaComment[]
-              likes: true, // AgendaLike[]
-              issueComments: true, // IssueComment[]
-              issueCommentLikes: true, // IssueCommentLike[]
-              votes: true, // Vote[]
+              comments: true,
+              likes: true,
+              issueComments: true,
+              issueCommentLikes: true,
+              votes: true,
             },
           },
         },
@@ -1007,7 +985,6 @@ adminIssueRoutes.get(
         (query as any).skip = 1;
       }
 
-      // 🔹 타입 우회 (런타임에는 _count가 들어있음)
       const users = await prisma.user.findMany(query as any);
 
       let nextCursor: string | null = null;
@@ -1023,15 +1000,12 @@ adminIssueRoutes.get(
           email: u.email,
           username: u.username,
           ctiType: u.ctiType,
-          // 🔹 전체 댓글 수(이슈 댓글 + 아젠다 댓글) 합산
           commentsCount:
             (u._count?.comments ?? 0) + (u._count?.issueComments ?? 0),
-          // 🔹 전체 투표/좋아요 성격 액션 합산
           votesCount:
             (u._count?.likes ?? 0) +
             (u._count?.issueCommentLikes ?? 0) +
             (u._count?.votes ?? 0),
-          // 🔹 status 없으면 기본 ACTIVE (Prisma enum 그대로 사용)
           status: (u.status ?? UserStatus.ACTIVE) as UserStatus,
           joinedAt: u.createdAt,
         })),
@@ -1039,9 +1013,7 @@ adminIssueRoutes.get(
       });
     } catch (e) {
       console.error("GET /api/admin/users error", e);
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   }
 );
@@ -1065,7 +1037,7 @@ adminIssueRoutes.get(
 );
 
 /* ─────────────────────────────────────────────
-   10. Articles 검색 (IssuesTab "전체 기사" 탭용)
+   10. Articles 검색
    GET /api/admin/articles/search?q=...
 ───────────────────────────────────────────── */
 adminIssueRoutes.get(
@@ -1074,15 +1046,10 @@ adminIssueRoutes.get(
   adminAuth,
   async (req: Request, res: Response) => {
     const q = (req.query.q as string | undefined)?.trim() ?? "";
-    const take = Math.min(
-      parseInt((req.query.take as string) ?? "1000", 10),
-      1000
-    );
-    // 전체 기사 탭 개수 제한
+    const take = Math.min(parseInt((req.query.take as string) ?? "1000", 10), 1000);
+
     try {
-      const where: any = {
-        url: { not: "" },
-      };
+      const where: any = { url: { not: "" } };
 
       if (q) {
         where.OR = [
@@ -1095,9 +1062,7 @@ adminIssueRoutes.get(
       const rows = await prisma.rawArticle.findMany({
         where,
         take,
-        orderBy: {
-          publishedAt: "desc",
-        },
+        orderBy: { publishedAt: "desc" },
         select: {
           id: true,
           outlet: true,
@@ -1112,12 +1077,10 @@ adminIssueRoutes.get(
       const items = rows.map((r) => {
         const url = r.url ?? "";
         return {
-          id: url || String(r.id), // ✅ ID = URL 우선
+          id: url || String(r.id),
           title: r.title ?? "(제목 없음)",
           source: r.outlet ?? "언론",
-          date: r.publishedAt
-            ? r.publishedAt.toISOString().slice(0, 10)
-            : "",
+          date: r.publishedAt ? r.publishedAt.toISOString().slice(0, 10) : "",
           url,
           summary: (r.text ?? "").slice(0, 300),
           side: r.side ?? "center",
@@ -1143,23 +1106,19 @@ adminIssueRoutes.post(
   adminAuth,
   async (req: Request, res: Response) => {
     try {
-      const {
-        title,
-        summary,
-        articleIds,
-      } = req.body as {
+      const { title, summary, articleIds } = req.body as {
         title?: string;
         summary?: string;
         articleIds?: string[];
       };
 
       if (!Array.isArray(articleIds) || articleIds.length === 0) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "articleIds must be a non-empty array" });
+        return res.status(400).json({
+          ok: false,
+          error: "articleIds must be a non-empty array",
+        });
       }
 
-      // 🔍 articleIds 는 현재 구조상 URL 이라고 가정 (admin recommended 쪽에서 그렇게 셋팅해놨으니까)
       const urls = Array.from(
         new Set(
           articleIds
@@ -1174,7 +1133,6 @@ adminIssueRoutes.post(
           outlet: true,
           title: true,
           side: true,
-          //text: true,
           publishedAt: true,
         },
       });
@@ -1184,14 +1142,8 @@ adminIssueRoutes.post(
           const outlet = a.outlet ?? "언론";
           const t = a.title ?? "(제목 없음)";
           const side =
-            a.side === "left"
-              ? "진보"
-              : a.side === "right"
-              ? "보수"
-              : "중립";
-          const date = a.publishedAt
-            ? a.publishedAt.toISOString().slice(0, 10)
-            : "";
+            a.side === "left" ? "진보" : a.side === "right" ? "보수" : "중립";
+          const date = a.publishedAt ? a.publishedAt.toISOString().slice(0, 10) : "";
           return `- [${side}] ${outlet} (${date}) : ${t}`;
         })
         .join("\n");
@@ -1219,11 +1171,11 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
    - title: 쟁점 제목 (짧게, 한 줄)
    - body: 이 쟁점이 무엇이고 왜 중요한지 2~3문장으로 설명
    - kind: 아래 중 하나 (문자열)
-     * "fact"     : 핵심 사실/배경 정리
-     * "conflict" : 갈등·대립 구조
-     * "impact"   : 시민/사회에 미치는 영향
-     * "future"   : 향후 전개·쟁점
-     * "etc"      : 위에 안 들어가면 etc
+     * "fact"
+     * "conflict"
+     * "impact"
+     * "future"
+     * "etc"
 3. 쟁점은 3~7개 정도로 만든다.
 4. 모든 내용은 한국어로 작성한다.
 `;
@@ -1248,21 +1200,11 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
         const tmp = JSON.parse(raw);
         if (Array.isArray(tmp)) parsed = tmp;
       } catch (e) {
-        console.error(
-          "[issues preview-talking-points] JSON parse error:",
-          e,
-          "raw=",
-          raw
-        );
+        console.error("[issues preview-talking-points] JSON parse error:", e, "raw=", raw);
       }
 
       const talkingPoints = parsed
-        .filter(
-          (p) =>
-            p &&
-            typeof p.title === "string" &&
-            typeof p.body === "string"
-        )
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
         .slice(0, 7)
         .map((p, idx) => ({
           order: typeof p.order === "number" ? p.order : idx + 1,
@@ -1271,22 +1213,13 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
           kind: typeof p.kind === "string" ? p.kind : "etc",
         }));
 
-      return res.json({
-        ok: true,
-        items: talkingPoints,
-      });
+      return res.json({ ok: true, items: talkingPoints });
     } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/issues/preview-talking-points] error:",
-        err
-      );
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
+      console.error("❌ [POST /api/admin/issues/preview-talking-points] error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   }
 );
-
 
 /* ─────────────────────────────────────────────
    11. 이슈 쟁점 리스트(AI) 재생성
@@ -1302,16 +1235,13 @@ adminIssueRoutes.post(
 
       const issue = await prisma.issue.findUnique({
         where: { id },
-        include: {
-          sources: true,
-        },
+        include: { sources: true },
       });
 
       if (!issue) {
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      // 🔍 기사 메타 + 원문 일부를 컨텍스트로 사용
       const urls = issue.sources
         .map((s) => s.url)
         .filter((u): u is string => !!u && u.trim().length > 0);
@@ -1320,7 +1250,6 @@ adminIssueRoutes.post(
         outlet: string | null;
         title: string | null;
         side: string | null;
-        //text: string | null;
         publishedAt: Date | null;
       }[] = [];
 
@@ -1331,7 +1260,6 @@ adminIssueRoutes.post(
             outlet: true,
             title: true,
             side: true,
-            //text: true,
             publishedAt: true,
           },
         });
@@ -1344,14 +1272,8 @@ adminIssueRoutes.post(
           const outlet = a.outlet ?? "언론";
           const title = a.title ?? "(제목 없음)";
           const side =
-            a.side === "left"
-              ? "진보"
-              : a.side === "right"
-              ? "보수"
-              : "중립";
-          const date = a.publishedAt
-            ? a.publishedAt.toISOString().slice(0, 10)
-            : "";
+            a.side === "left" ? "진보" : a.side === "right" ? "보수" : "중립";
+          const date = a.publishedAt ? a.publishedAt.toISOString().slice(0, 10) : "";
           return `- [${side}] ${outlet} (${date}) : ${title}`;
         })
         .join("\n");
@@ -1379,11 +1301,11 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
    - title: 쟁점 제목 (짧게, 한 줄)
    - body: 이 쟁점이 무엇이고 왜 중요한지 2~3문장으로 설명
    - kind: 아래 중 하나 (문자열)
-     * "fact"     : 핵심 사실/배경 정리
-     * "conflict" : 갈등·대립 구조
-     * "impact"   : 시민/사회에 미치는 영향
-     * "future"   : 향후 전개·쟁점
-     * "etc"      : 위에 안 들어가면 etc
+     * "fact"
+     * "conflict"
+     * "impact"
+     * "future"
+     * "etc"
 3. 쟁점은 3~7개 정도로 만든다.
 4. 모든 내용은 한국어로 작성한다.
 `;
@@ -1408,22 +1330,11 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
         const tmp = JSON.parse(raw);
         if (Array.isArray(tmp)) parsed = tmp;
       } catch (e) {
-        console.error(
-          "[issues refresh-talking-points] JSON parse error:",
-          e,
-          "raw=",
-          raw
-        );
+        console.error("[issues refresh-talking-points] JSON parse error:", e, "raw=", raw);
       }
 
-      // 최소 검증/클린업
       const talkingPoints = parsed
-        .filter(
-          (p) =>
-            p &&
-            typeof p.title === "string" &&
-            typeof p.body === "string"
-        )
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
         .slice(0, 7)
         .map((p, idx) => ({
           order: typeof p.order === "number" ? p.order : idx + 1,
@@ -1432,12 +1343,11 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
           kind: typeof p.kind === "string" ? p.kind : "etc",
         }));
 
-      // Prisma relation(talkingPoints) 전체 갈아끼우기
       const updated = await prisma.issue.update({
         where: { id },
         data: {
           talkingPoints: {
-            deleteMany: {}, // 기존 쟁점 전부 삭제
+            deleteMany: {},
             create: talkingPoints.map((tp) => ({
               order: tp.order,
               title: tp.title,
@@ -1453,18 +1363,10 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
         },
       });
 
-      return res.json({
-        ok: true,
-        items: updated.talkingPoints,
-      });
+      return res.json({ ok: true, items: updated.talkingPoints });
     } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/issues/:id/refresh-talking-points] error:",
-        err
-      );
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
+      console.error("❌ [POST /api/admin/issues/:id/refresh-talking-points] error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   }
 );
@@ -1472,7 +1374,6 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
 /**
  * ✏️ 이슈 쟁점 리스트 수동 저장
  * PUT /api/admin/issues/:id/talking-points
- * body: { items: { order?: number; title: string; body: string; kind?: string | null; }[] }
  */
 adminIssueRoutes.put(
   "/issues/:id/talking-points",
@@ -1491,12 +1392,9 @@ adminIssueRoutes.put(
       };
 
       if (!Array.isArray(items)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "items must be an array" });
+        return res.status(400).json({ ok: false, error: "items must be an array" });
       }
 
-      // 최소 유효성 + 기본값 정리
       const cleaned = items
         .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
         .map((i, idx) => ({
@@ -1510,36 +1408,25 @@ adminIssueRoutes.put(
         where: { id },
         data: {
           talkingPoints: {
-            deleteMany: {},      // 기존 쟁점 전부 삭제
-            create: cleaned,     // 새 쟁점 전부 생성
+            deleteMany: {},
+            create: cleaned,
           },
         },
         include: {
-          talkingPoints: {
-            orderBy: { order: "asc" },
-          },
+          talkingPoints: { orderBy: { order: "asc" } },
         },
       });
 
-      return res.json({
-        ok: true,
-        items: updated.talkingPoints,
-      });
+      return res.json({ ok: true, items: updated.talkingPoints });
     } catch (err) {
-      console.error(
-        "❌ [PUT /api/admin/issues/:id/talking-points] error:",
-        err
-      );
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
+      console.error("❌ [PUT /api/admin/issues/:id/talking-points] error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   }
 );
 
-
 /* ─────────────────────────────────────────────
-   12. 이슈 AI 제목/요약 재생성
+   12. 이슈 AI 제목/요약 재생성 (비어있을 때만)
    POST /api/admin/issues/:id/refresh-summary
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
@@ -1559,41 +1446,32 @@ adminIssueRoutes.post(
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      // ✅ 이미 사람이 손댄 값이면 재생성하지 않도록 체크
       const hasTitle =
-        (issue.title ?? "").trim().length > 0 &&
-        (issue.title ?? "").trim() !== "(제목 없음)";
+        (issue.title ?? "").trim().length > 0 && issue.title.trim() !== "(제목 없음)";
       const hasSummary = (issue.summary ?? "").trim().length > 0;
 
       let newTitle: string | undefined;
       let newSummary: string | undefined;
 
-      // 🔹 제목이 비어 있을 때만 생성
       if (!hasTitle) {
         try {
           const aiTitle = await generateIssueTitle(issue as any);
-          if (aiTitle?.trim()?.length) {
-            newTitle = aiTitle.trim();
-          }
+          if (aiTitle?.trim()?.length) newTitle = aiTitle.trim();
         } catch (e) {
           console.error("[refresh-summary] 제목 생성 실패:", e);
         }
       }
 
-      // 🔹 요약이 비어 있을 때만 생성
       if (!hasSummary) {
         try {
           const aiSummary = await generateIssueSummary(issue as any);
-          if (aiSummary?.trim()?.length) {
-            newSummary = aiSummary.trim();
-          }
+          if (aiSummary?.trim()?.length) newSummary = aiSummary.trim();
         } catch (e) {
           console.error("[refresh-summary] 요약 생성 실패:", e);
         }
       }
 
       if (!newTitle && !newSummary) {
-        // 생성할 게 없으면 그대로 반환
         return res.json({ ok: true, item: issue });
       }
 
@@ -1613,7 +1491,6 @@ adminIssueRoutes.post(
   }
 );
 
-
 /* ─────────────────────────────────────────────
    13. 이슈 용어 사전 재생성
    POST /api/admin/issues/:id/refresh-glossary
@@ -1629,12 +1506,9 @@ adminIssueRoutes.post(
       const updated = await refreshIssueGlossary(id);
 
       if (!updated) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "NOT_FOUND" });
+        return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      // 프론트 GlossaryPage에서 기대하는 형태에 맞춰서 응답
       return res.json({
         ok: true,
         item: {
@@ -1642,13 +1516,8 @@ adminIssueRoutes.post(
         },
       });
     } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/issues/:id/refresh-glossary] error:",
-        err
-      );
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
+      console.error("❌ [POST /api/admin/issues/:id/refresh-glossary] error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   }
 );
@@ -1656,8 +1525,6 @@ adminIssueRoutes.post(
 /* ─────────────────────────────────────────────
    14. 이슈 쟁점 리스트 검증 (원문 기반 fact-check)
    POST /api/admin/issues/:id/validate-talking-points
-   - DB에 저장된 talkingPoints 또는 body에서 받은 talkingPoints 기준으로
-     기사 원문(text)을 참고해 쟁점의 근거 여부를 평가
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
   "/issues/:id/validate-talking-points",
@@ -1667,9 +1534,7 @@ adminIssueRoutes.post(
     try {
       const { id } = req.params;
 
-      const {
-        talkingPoints: talkingPointsFromBody,
-      } = req.body as {
+      const { talkingPoints: talkingPointsFromBody } = req.body as {
         talkingPoints?: {
           order?: number;
           title: string;
@@ -1678,14 +1543,11 @@ adminIssueRoutes.post(
         }[];
       };
 
-      // 1) 이슈 + 연결 기사 + 저장된 쟁점 가져오기
       const issue = await prisma.issue.findUnique({
         where: { id },
         include: {
           sources: true,
-          talkingPoints: {
-            orderBy: { order: "asc" },
-          },
+          talkingPoints: { orderBy: { order: "asc" } },
         },
       });
 
@@ -1693,9 +1555,6 @@ adminIssueRoutes.post(
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      // 2) 검증 대상 쟁점 리스트 결정
-      //    - body에 talkingPoints가 오면 그걸 우선 사용 (프론트에서 수정 중인 값 보내줄 수 있음)
-      //    - 없으면 DB에 저장된 IssueTalkingPoint 사용
       const baseTalkingPoints =
         Array.isArray(talkingPointsFromBody) && talkingPointsFromBody.length > 0
           ? talkingPointsFromBody
@@ -1714,7 +1573,6 @@ adminIssueRoutes.post(
         });
       }
 
-      // 3) 이 이슈에 연결된 기사 URL 기준으로 rawArticle + text 가져오기
       const urls = issue.sources
         .map((s) => s.url)
         .filter((u): u is string => !!u && u.trim().length > 0);
@@ -1747,20 +1605,13 @@ adminIssueRoutes.post(
         });
       }
 
-      // 4) LLM에 넘길 기사 컨텍스트 구성 (원문 전체 X, 일부만)
       const articleBlocks = raws.map((a, idx) => {
         const outlet = a.outlet ?? "언론";
         const title = a.title ?? "(제목 없음)";
         const side =
-          a.side === "left"
-            ? "진보"
-            : a.side === "right"
-            ? "보수"
-            : "중립";
-        const date = a.publishedAt
-          ? a.publishedAt.toISOString().slice(0, 10)
-          : "";
-        const text = (a.text ?? "").slice(0, 1500); // ✅ 과도한 재현 방지: 앞부분만 잘라서 사용
+          a.side === "left" ? "진보" : a.side === "right" ? "보수" : "중립";
+        const date = a.publishedAt ? a.publishedAt.toISOString().slice(0, 10) : "";
+        const text = (a.text ?? "").slice(0, 1500);
 
         return `[#${idx + 1}] [${side}] ${outlet} (${date}) : ${title}
 본문 일부:
@@ -1790,22 +1641,19 @@ ${talkingPointsJson}
 평가 규칙:
 
 1. 각 쟁점에 대해 다음 중 하나의 verdict를 선택한다.
-   - "supported"          : 기사들에서 명확하게 근거를 찾을 수 있음
-   - "partially_supported": 일부는 근거가 있지만, 과장/추측/해석이 섞여 있음
-   - "not_supported"      : 기사 내용으로는 뒷받침되지 않음
-   - "unclear"            : 기사 일부와 관련이 있어 보이지만, 명확하게 판단하기 어려움
+   - "supported"
+   - "partially_supported"
+   - "not_supported"
+   - "unclear"
 
 2. 각 쟁점마다 다음 정보를 JSON 객체로 반환한다.
-   - order: 원래 쟁점의 order (없으면 1부터 순서대로 부여)
-   - title: 원래 쟁점 제목
-   - verdict: "supported" | "partially_supported" | "not_supported" | "unclear"
-   - reason: 한국어로 2~3문장 설명 (어떤 점이 기사와 일치/불일치하는지, 과장 여부 등)
-   - suggestion: 선택값. verdict가 "partially_supported" 또는 "not_supported"인 경우,
-                 사실에 더 가깝게 다듬은 쟁점 설명(본문)을 제안한다.
+   - order
+   - title
+   - verdict
+   - reason: 한국어로 2~3문장
+   - suggestion: (선택) partially/not_supported일 때 더 사실에 가깝게 다듬은 제안
 
-3. 기사 원문을 그대로 길게 복사하지 말고,
-   핵심 내용만 짧게 요약해서 설명하라.
-
+3. 기사 원문을 그대로 길게 복사하지 말고 핵심만 짧게 요약하라.
 4. 최종 출력은 JSON 배열만 반환한다. (설명 문장, 마크다운, 주석 금지)
 `;
 
@@ -1829,15 +1677,9 @@ ${talkingPointsJson}
         const tmp = JSON.parse(raw);
         if (Array.isArray(tmp)) parsed = tmp;
       } catch (e) {
-        console.error(
-          "[issues validate-talking-points] JSON parse error:",
-          e,
-          "raw=",
-          raw
-        );
+        console.error("[issues validate-talking-points] JSON parse error:", e, "raw=", raw);
       }
 
-      // 최소 검증/클린업
       const results = parsed
         .filter(
           (p) =>
@@ -1859,28 +1701,19 @@ ${talkingPointsJson}
             : "unclear",
           reason: String(p.reason).slice(0, 800),
           suggestion:
-            typeof p.suggestion === "string"
-              ? String(p.suggestion).slice(0, 800)
-              : null,
+            typeof p.suggestion === "string" ? String(p.suggestion).slice(0, 800) : null,
         }));
 
-      return res.json({
-        ok: true,
-        items: results,
-      });
+      return res.json({ ok: true, items: results });
     } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/issues/:id/validate-talking-points] error:",
-        err
-      );
-      return res
-        .status(500)
-        .json({ ok: false, error: "INTERNAL_ERROR" });
+      console.error("❌ [POST /api/admin/issues/:id/validate-talking-points] error:", err);
+      return res.status(500).json({ ok: false, error: "INTERNAL_ERROR" });
     }
   }
 );
+
 /* ─────────────────────────────────────────────
-   12. 이슈 AI 제목만 재생성
+   15. 이슈 AI 제목만 재생성
    POST /api/admin/issues/:id/refresh-title
 ───────────────────────────────────────────── */
 adminIssueRoutes.post(
@@ -1900,27 +1733,21 @@ adminIssueRoutes.post(
         return res.status(404).json({ ok: false, error: "NOT_FOUND" });
       }
 
-      // 🔹 기존 generateIssueTitle 재사용
       let newTitle: string | undefined;
       try {
         const aiTitle = await generateIssueTitle(issue as any);
-        if (aiTitle?.trim()?.length) {
-          newTitle = aiTitle.trim();
-        }
+        if (aiTitle?.trim()?.length) newTitle = aiTitle.trim();
       } catch (e) {
         console.error("[refresh-title] 제목 생성 실패:", e);
       }
 
-      // 새 제목 못 만들었으면 그냥 기존 이슈 그대로 반환
       if (!newTitle) {
         return res.json({ ok: true, item: issue });
       }
 
       const updated = await prisma.issue.update({
         where: { id },
-        data: {
-          title: newTitle,
-        },
+        data: { title: newTitle },
       });
 
       return res.json({ ok: true, item: updated });
@@ -1931,3 +1758,212 @@ adminIssueRoutes.post(
   }
 );
 
+/* ─────────────────────────────────────────────
+   내부: 메타 기반 쟁점 생성
+───────────────────────────────────────────── */
+async function generateTalkingPointsFromMeta(params: {
+  title: string;
+  summary: string | null;
+  urls: string[];
+}) {
+  const { title, summary, urls } = params;
+  if (!urls?.length) return [];
+
+  const raws = await prisma.rawArticle.findMany({
+    where: { url: { in: urls } },
+    select: {
+      outlet: true,
+      title: true,
+      side: true,
+      publishedAt: true,
+    },
+  });
+
+  const articlesSummary = raws
+    .map((a) => {
+      const outlet = a.outlet ?? "언론";
+      const t = a.title ?? "(제목 없음)";
+      const side =
+        a.side === "left" ? "진보" : a.side === "right" ? "보수" : "중립";
+      const date = a.publishedAt ? a.publishedAt.toISOString().slice(0, 10) : "";
+      return `- [${side}] ${outlet} (${date}) : ${t}`;
+    })
+    .join("\n");
+
+  const prompt = `
+너는 한국어로 인터넷 뉴스 기사 이슈의 핵심 쟁점을 뽑는 에디터야.
+
+아래 정보를 보고, 독자가 이 이슈를 이해할 때
+"어디에 집중해서 기사를 읽어야 하는지"를 알려주는 쟁점 리스트를 만들어라.
+
+[이슈 제목]
+${title ?? ""}
+
+[이슈 요약]
+${summary ?? ""}
+
+[포함된 기사 목록]
+${articlesSummary || "(기사 메타 정보 없음)"}
+
+규칙을 지켜라.
+
+1. JSON 배열만 출력한다. (설명 문장, 주석, 마크다운 금지)
+2. 각 항목은 다음 필드를 가진다.
+   - order: 숫자 (1부터 시작, 정렬용)
+   - title: 쟁점 제목 (짧게, 한 줄)
+   - body: 이 쟁점이 무엇이고 왜 중요한지 2~3문장으로 설명
+   - kind: 아래 중 하나 (문자열)
+     * "fact"
+     * "conflict"
+     * "impact"
+     * "future"
+     * "etc"
+3. 쟁점은 3~7개 정도로 만든다.
+4. 모든 내용은 한국어로 작성한다.
+`;
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4.1-mini",
+    messages: [
+      {
+        role: "system",
+        content:
+          "너는 한국 정치·사회 이슈의 쟁점 리스트를 만드는 한국어 에디터이다. 반드시 JSON 배열만 출력한다.",
+      },
+      { role: "user", content: prompt },
+    ],
+    temperature: 0.4,
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? "[]";
+
+  let parsed: any[] = [];
+  try {
+    const tmp = JSON.parse(raw);
+    if (Array.isArray(tmp)) parsed = tmp;
+  } catch (e) {
+    console.error("[auto talkingPoints] JSON parse error:", e, "raw=", raw);
+  }
+
+  const talkingPoints = parsed
+    .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
+    .slice(0, 7)
+    .map((p, idx) => ({
+      order: typeof p.order === "number" ? p.order : idx + 1,
+      title: String(p.title).slice(0, 100),
+      body: String(p.body).slice(0, 800),
+      kind: typeof p.kind === "string" ? String(p.kind) : "etc",
+    }));
+
+  return talkingPoints;
+}
+
+/**
+ * ✅ 등록(PUBLISHED) 시점에 빈 AI 필드 자동 채우기
+ * - title: 비었거나 "(제목 없음)" 이면 생성
+ * - summary: 비었으면 생성
+ * - talkingPoints: 하나도 없으면 생성
+ * - glossaryText: 비었으면 생성
+ */
+async function fillAiFieldsIfEmptyOnPublish(issueId: string) {
+  const issue = await prisma.issue.findUnique({
+    where: { id: issueId },
+    include: {
+      sources: true,
+      talkingPoints: { orderBy: { order: "asc" } },
+    },
+  });
+  if (!issue) return;
+
+  const urls = issue.sources
+    .map((s) => s.url)
+    .filter((u): u is string => !!u && u.trim().length > 0);
+
+  const hasTitle =
+    (issue.title ?? "").trim().length > 0 && issue.title.trim() !== "(제목 없음)";
+  const hasSummary = (issue.summary ?? "").trim().length > 0;
+  const hasGlossary = (issue.glossaryText ?? "").trim().length > 0;
+  const hasTalkingPoints = (issue.talkingPoints?.length ?? 0) > 0;
+
+  let newTitle: string | undefined;
+  let newSummary: string | undefined;
+
+  try {
+    const fullIssue = await prisma.issue.findUnique({
+      where: { id: issueId },
+      include: { sources: true },
+    });
+
+    if (fullIssue) {
+      if (!hasTitle) {
+        try {
+          const aiTitle = await generateIssueTitle(fullIssue as any);
+          if (aiTitle?.trim()?.length) newTitle = aiTitle.trim();
+        } catch (e) {
+          console.error("[auto publish] generate title failed:", e);
+        }
+      }
+
+      if (!hasSummary) {
+        try {
+          const aiSummary = await generateIssueSummary(fullIssue as any);
+          if (aiSummary?.trim()?.length) newSummary = aiSummary.trim();
+        } catch (e) {
+          console.error("[auto publish] generate summary failed:", e);
+        }
+      }
+    }
+  } catch (e) {
+    console.error("[auto publish] load fullIssue failed:", e);
+  }
+
+  let newTalkingPoints: { order: number; title: string; body: string; kind: string }[] =
+    [];
+
+  if (!hasTalkingPoints) {
+    try {
+      newTalkingPoints = await generateTalkingPointsFromMeta({
+        title: newTitle ?? issue.title ?? "",
+        summary: newSummary ?? issue.summary ?? null,
+        urls,
+      });
+    } catch (e) {
+      console.error("[auto publish] generate talkingPoints failed:", e);
+    }
+  }
+
+  const needUpdateTitle = !!newTitle;
+  const needUpdateSummary = !!newSummary;
+  const needUpdateTalkingPoints = !hasTalkingPoints && newTalkingPoints.length > 0;
+
+  if (needUpdateTitle || needUpdateSummary || needUpdateTalkingPoints) {
+    await prisma.issue.update({
+      where: { id: issueId },
+      data: {
+        ...(needUpdateTitle ? { title: newTitle } : {}),
+        ...(needUpdateSummary ? { summary: newSummary } : {}),
+        ...(needUpdateTalkingPoints
+          ? {
+              talkingPoints: {
+                deleteMany: {},
+                create: newTalkingPoints.map((tp) => ({
+                  order: tp.order,
+                  title: tp.title,
+                  body: tp.body,
+                  kind: tp.kind,
+                })),
+              },
+            }
+          : {}),
+      },
+    });
+  }
+
+  if (!hasGlossary) {
+    try {
+      await refreshIssueGlossary(issueId);
+    } catch (e) {
+      console.error("[auto publish] refresh glossary failed:", e);
+    }
+  }
+}
