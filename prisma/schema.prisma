@@ -913,3 +913,20 @@ model ClipIssueSensemaking {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model JobLock {
+  key         String   @id
+  lockedUntil DateTime
+  runId       String?
+  updatedAt   DateTime @updatedAt
+
+  @@index([lockedUntil])
+}
+model YoutubeChannelCursor {
+  channelId       String   @id
+  lastPublishedAt DateTime?
+  updatedAt       DateTime @updatedAt
+
+  @@index([lastPublishedAt])
+}
+
