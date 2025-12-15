@@ -340,25 +340,35 @@ newsClipsRouter.post(
 /* ─────────────────────────────────────────
    GET /api/news-clips/:id/glossary
 ───────────────────────────────────────── */
+// GET /api/news-clips/:id/glossary
 newsClipsRouter.get("/:id/glossary", async (req, res) => {
-  const { id } = req.params;
-
-  const issue = await prisma.clipIssue.findUnique({
-    where: { id },
-    select: { glossaryText: true },
-  });
-  if (!issue) return res.status(404).json({ error: "NOT_FOUND" });
-
-  const text = issue.glossaryText ?? "";
-
-  // 1) glossaryText가 JSON 문자열이면 items로 제공
   try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return res.json({ items: parsed, text });
-    if (parsed?.items && Array.isArray(parsed.items))
-      return res.json({ items: parsed.items, text });
-  } catch {}
+    const { id } = req.params;
 
-  // 2) 아니면 text만
-  return res.json({ text });
+    const issue = await prisma.clipIssue.findUnique({
+      where: { id },
+      select: { glossaryText: true },
+    });
+
+    if (!issue) return res.status(404).json({ error: "NOT_FOUND" });
+
+    const text = (issue.glossaryText ?? "").trim();
+
+    if (!text) {
+      return res.json({ ok: false, error: "NOT_READY", items: [] });
+    }
+
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed))
+        return res.json({ ok: true, items: parsed, text });
+      if (parsed?.items && Array.isArray(parsed.items))
+        return res.json({ ok: true, items: parsed.items, text });
+    } catch {}
+
+    return res.json({ ok: true, text });
+  } catch (e) {
+    console.error("GET /news-clips/:id/glossary error", e);
+    return res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
 });
