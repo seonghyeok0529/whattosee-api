@@ -8,6 +8,48 @@ function take(str?: string | null, max = 4000) {
   return str.length > max ? str.slice(0, max) : str;
 }
 
+/* ─────────────────────────────────────────
+   glossaryText를 항상 "JSON 문자열"로 정규화
+───────────────────────────────────────── */
+type GlossaryItem = { term: string; definition: string };
+
+function normalizeGlossaryTextToJsonString(input: any): string | null {
+  if (input == null) return null;
+
+  // input이 배열이면 -> term/definition만 정제해서 JSON.stringify
+  if (Array.isArray(input)) {
+    const items: GlossaryItem[] = input
+      .filter(
+        (x) => x && typeof x.term === "string" && typeof x.definition === "string"
+      )
+      .map((x) => ({
+        term: x.term.trim().slice(0, 80),
+        definition: x.definition.trim().slice(0, 300),
+      }));
+
+    return items.length ? JSON.stringify(items) : null;
+  }
+
+  // 문자열이 아니면 저장 불가
+  if (typeof input !== "string") return null;
+
+  const s = input.trim();
+  if (!s) return null;
+
+  // 문자열이 JSON 배열이면 재귀로 정규화
+  try {
+    const parsed = JSON.parse(s);
+    if (Array.isArray(parsed)) {
+      return normalizeGlossaryTextToJsonString(parsed);
+    }
+  } catch {
+    // not json
+  }
+
+  // JSON이 아니면 저장하지 않음(= null). 프론트 파싱 실패 방지.
+  return null;
+}
+
 /* -------------------------------------------------------
  * 1) AI 제목 생성
  *  - 여러 클립의 제목만 이용 (자막/본문 사용 X)
@@ -209,19 +251,13 @@ ${descriptionBlock}
 }
 
 /* -------------------------------------------------------
- * 3) 쟁점 리스트 생성 → ClipIssue.talkingPoints 저장
- *  - 요약 + 메타를 바탕으로, 시청 전에 보면 좋은 쟁점/질문 리스트
- *  - 원본 내용 “대신 읽어주는 것”이 아니라, “볼 때 뭘 볼지”를 정리
+ * 3) 쟁점 리스트 생성 → "생성만" 하고 저장은 하지 않음
+ *  - talkingPoints가 relation일 가능성 높아서 update 저장하면 언젠가 깨짐
  * ----------------------------------------------------- */
 export async function generateClipIssueTalkingPoints(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
     where: { id: clipIssueId },
-    include: {
-      clips: {
-        include: { rawClip: true },
-        take: 12,
-      },
-    },
+    include: { clips: { include: { rawClip: true }, take: 12 } },
   });
 
   if (!issue) throw new Error("CLIP_ISSUE_NOT_FOUND");
@@ -239,9 +275,7 @@ export async function generateClipIssueTalkingPoints(clipIssueId: string) {
           : r.side === "center"
           ? "(중도)"
           : "(중립)";
-      const channel = r.channel ?? "채널";
-      const title = r.title ?? "(제목 없음)";
-      return `- [${i + 1}] ${channel} ${side}: ${title}`;
+      return `- [${i + 1}] ${r.channel ?? "채널"} ${side}: ${r.title ?? "(제목 없음)"}`;
     })
     .filter(Boolean)
     .join("\n");
@@ -257,14 +291,13 @@ ${issue.aiSummary}
 ${clipLines}
 
 요구사항:
-- 쟁점 리스트는 3~7개 bullet로 작성
-- 각 항목은 1문장 이내로, "어떤 논점/갈등/질문"에 주목해야 하는지 알려줄 것
-- 원본 영상 내용을 대신 요약하려 하지 말 것
-- '무엇이 쟁점인지'와 '무엇을 비교/비판적으로 생각해야 하는지'에 초점을 둘 것
-- 문장 끝에 마침표는 생략해도 된다
+- 3~7개 bullet
+- 각 항목 1문장 이내
+- 원본 내용을 대신 요약하지 말 것
+- "무엇이 쟁점인지" + "무엇을 비교/비판적으로 생각할지" 중심
 
 출력 형식:
-- 마크다운 bullet 리스트 형태 (- 로 시작)
+- 마크다운 bullet 리스트 (- 로 시작)
   `.trim();
 
   const res = await openai.chat.completions.create({
@@ -273,67 +306,38 @@ ${clipLines}
     messages: [
       {
         role: "system",
-        content:
-          "너는 시청자가 뉴스를 볼 때 중요한 쟁점과 질문을 짚어주는 가이드다. 원본 내용을 대신 요약하지 말고, 생각할 포인트를 제시한다.",
+        content: "너는 시청자가 뉴스를 볼 때 중요한 쟁점과 질문을 짚어주는 가이드다.",
       },
       { role: "user", content: prompt },
     ],
   });
 
-  const talkingPoints = res.choices?.[0]?.message?.content?.trim() ?? "";
-
-  if (!talkingPoints) return "";
-
-  await prisma.clipIssue.update({
-    where: { id: clipIssueId },
-    data: {
-      // @ts-ignore: ClipIssue 모델에 talkingPoints 필드 있다고 가정
-      talkingPoints,
-    },
-  });
-
-  return talkingPoints;
+  // ✅ 저장하지 않고 반환만
+  return res.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 /* -------------------------------------------------------
- * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText + talkingPoints)
- *    (좌/우 프레임 요약은 제거)
+ * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText)
+ *  - glossaryText: JSON 문자열로 정규화해서 저장
+ *  - talkingPoints: 생성만 해서 반환, 저장은 제거
  * ----------------------------------------------------- */
 export async function refreshClipIssueAIFields(clipIssueId: string) {
-  // 제목 / 요약 병렬 생성
   const [title, aiSummary] = await Promise.all([
     generateClipIssueTitle(clipIssueId),
     generateClipIssueSummary(clipIssueId),
   ]);
 
-  // 1차 업데이트: 기본 AI 필드 + 클립 목록 로드
   const updatedBase = await prisma.clipIssue.update({
     where: { id: clipIssueId },
-    data: {
-      title,
-      aiSummary,
-    },
-    include: {
-      clips: {
-        include: { rawClip: true },
-        take: 18,
-      },
-    },
+    data: { title, aiSummary },
+    include: { clips: { include: { rawClip: true }, take: 18 } },
   });
 
-  // 쟁점 리스트 생성 (aiSummary를 활용)
-  const talkingPoints = await generateClipIssueTalkingPoints(clipIssueId);
-
-  // glossary용 클립 목록 텍스트 구성
   const clipsText = updatedBase.clips
-    .map((ic) => {
-      const ch = ic.rawClip?.channel ?? "채널";
-      const t = ic.rawClip?.title ?? "(제목 없음)";
-      return `- [${ch}] ${t}`;
-    })
+    .map((ic) => `- [${ic.rawClip?.channel ?? "채널"}] ${ic.rawClip?.title ?? "(제목 없음)"}`)
     .join("\n");
 
-  const glossaryText = await generateGlossaryText({
+  const rawGlossary = await generateGlossaryText({
     title: updatedBase.title,
     summary: updatedBase.aiSummary ?? updatedBase.description ?? null,
     itemsText: clipsText,
@@ -341,55 +345,43 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     sourceType: "clip",
   });
 
-  // glossaryText / talkingPoints 반영
+  const glossaryJsonString = normalizeGlossaryTextToJsonString(rawGlossary);
+
   const final = await prisma.clipIssue.update({
     where: { id: clipIssueId },
     data: {
-      // @ts-ignore
-      glossaryText,
-      // @ts-ignore
-      talkingPoints: talkingPoints || null,
+      glossaryText: glossaryJsonString,
+      // ✅ talkingPoints 저장 제거 (relation/라우터 충돌 방지)
     },
   });
 
+  // 필요하면 생성만 해서 반환
+  const talkingPoints = await generateClipIssueTalkingPoints(clipIssueId);
+
   return {
     ...final,
-    // @ts-ignore
-    glossaryText,
-    // @ts-ignore
-    talkingPoints,
+    glossaryText: glossaryJsonString,
+    talkingPoints, // ✅ 저장 X, 반환만
   } as any;
 }
 
 /* -------------------------------------------------------
  * 5) 클립 이슈 용어 사전만 재생성
- *  - generateGlossaryText 재사용
+ *  - glossaryText: JSON 문자열로 정규화해서 저장
  * ----------------------------------------------------- */
 export async function refreshClipIssueGlossary(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
     where: { id: clipIssueId },
-    include: {
-      clips: {
-        include: { rawClip: true },
-        take: 18,
-      },
-    },
+    include: { clips: { include: { rawClip: true }, take: 18 } },
   });
 
-  if (!issue) {
-    return null;
-  }
+  if (!issue) return null;
 
-  // LLM이 참고할 클립 목록 텍스트
   const clipsText = (issue.clips ?? [])
-    .map((ic) => {
-      const ch = ic.rawClip?.channel ?? "채널";
-      const t = ic.rawClip?.title ?? "(제목 없음)";
-      return `- [${ch}] ${t}`;
-    })
+    .map((ic) => `- [${ic.rawClip?.channel ?? "채널"}] ${ic.rawClip?.title ?? "(제목 없음)"}`)
     .join("\n");
 
-  const glossaryText = await generateGlossaryText({
+  const rawGlossary = await generateGlossaryText({
     title: issue.title,
     summary: issue.aiSummary ?? issue.description ?? null,
     itemsText: clipsText,
@@ -397,16 +389,11 @@ export async function refreshClipIssueGlossary(clipIssueId: string) {
     sourceType: "clip",
   });
 
-  const updated = await prisma.clipIssue.update({
-    where: { id: clipIssueId },
-    data: {
-      glossaryText,
-    },
-    select: {
-      id: true,
-      glossaryText: true,
-    },
-  });
+  const glossaryJsonString = normalizeGlossaryTextToJsonString(rawGlossary);
 
-  return updated;
+  return await prisma.clipIssue.update({
+    where: { id: clipIssueId },
+    data: { glossaryText: glossaryJsonString },
+    select: { id: true, glossaryText: true },
+  });
 }
