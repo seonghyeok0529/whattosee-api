@@ -9,9 +9,12 @@ import {
 import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
 
-import { refreshClipIssueAIFields, 
-        refreshClipIssueGlossary, 
+import {
+  refreshClipIssueAIFields,
+  refreshClipIssueGlossary,
 } from "../services/clipIssueAi";
+
+import { generateGlossaryText } from "../services/generateGlossary"; // ✅ 추가 (빌드 에러 해결)
 import { OpenAI } from "openai";
 
 const router = Router();
@@ -24,7 +27,6 @@ const openai = new OpenAI({
    HTML 엔티티 디코딩 유틸 (이 파일 안에서만 사용)
 ---------------------------------------------------- */
 function decodeHtml(str: string | null | undefined): string | null {
-  // null / undefined 둘 다 여기서 처리해서 항상 string | null만 리턴
   if (str == null) return null;
 
   return str
@@ -47,7 +49,9 @@ function sanitizeTalkingPoints(items: IncomingTalkingPoint[] | undefined) {
   if (!Array.isArray(items)) return null;
 
   const cleaned = items
-    .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+    .filter(
+      (i) => i && typeof i.title === "string" && typeof i.body === "string"
+    )
     .map((i, idx) => ({
       order: typeof i.order === "number" ? i.order : idx + 1,
       title: String(i.title).slice(0, 100),
@@ -57,7 +61,6 @@ function sanitizeTalkingPoints(items: IncomingTalkingPoint[] | undefined) {
 
   return cleaned;
 }
-
 
 // 객체 전체 디코드 (string, array, nested object 포함)
 // Date 같은 객체는 건들지 않도록 예외 처리
@@ -70,15 +73,11 @@ function decodeObject<T extends Record<string, any>>(obj: T): T {
     if (typeof value === "string") {
       result[key] = decodeHtml(value);
     } else if (value instanceof Date) {
-      result[key] = value; // 날짜는 그대로 유지
+      result[key] = value;
     } else if (Array.isArray(value)) {
       result[key] = value.map((v) => {
-        if (typeof v === "string") {
-          return decodeHtml(v);
-        }
-        if (v instanceof Date) {
-          return v;
-        }
+        if (typeof v === "string") return decodeHtml(v);
+        if (v instanceof Date) return v;
         if (typeof v === "object" && v !== null) {
           return decodeObject(v as Record<string, any>);
         }
@@ -94,386 +93,348 @@ function decodeObject<T extends Record<string, any>>(obj: T): T {
   return result as T;
 }
 
+/* ----------------------------------------------------
+   공통 유틸: clipIds로 RawClip 로드 + 컨텍스트 문자열 만들기
+---------------------------------------------------- */
+async function loadRawClipsForPreview(clipIds: string[]) {
+  const ids = Array.isArray(clipIds) ? clipIds.filter(Boolean) : [];
+  if (ids.length === 0) return [];
+
+  const rawClips = await prisma.rawClip.findMany({
+    where: { id: { in: ids } },
+  });
+
+  // 입력 순서를 최대한 유지하고 싶으면 맵으로 재정렬
+  const map = new Map(rawClips.map((c) => [c.id, c]));
+  const ordered = ids.map((id) => map.get(id)).filter(Boolean) as typeof rawClips;
+
+  return ordered.length ? ordered : rawClips;
+}
+
+function buildClipsSummaryForPrompt(rawClips: any[]) {
+  return (rawClips ?? [])
+    .map((c: any) => {
+      const side =
+        c.side === "left" ? "진보" : c.side === "right" ? "보수" : "중립";
+      const title = c.title ?? "(제목 없음)";
+      const channel = c.channel ?? "채널";
+      return `- [${side}] ${channel}: ${title}`;
+    })
+    .join("\n");
+}
+
+function buildClipsTextForGlossary(rawClips: any[]) {
+  return (rawClips ?? [])
+    .map((c: any) => {
+      const ch = c.channel ?? "채널";
+      const t = c.title ?? "(제목 없음)";
+      return `- [${ch}] ${t}`;
+    })
+    .join("\n");
+}
+
 /**
  * POST /api/admin/news-clips/ingest
- * 최근 N시간 유튜브 뉴스 클립 RawClip으로 수집
  */
-router.post(
-  "/news-clips/ingest",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const hours = req.body?.hours ? Number(req.body.hours) : undefined;
-      const result = await ingestYoutubeNewsClips({ hours });
-      res.json(
-        decodeObject({
-          ok: true,
-          ...result,
-        } as Record<string, any>)
-      );
-    } catch (err) {
-      next(err);
-    }
+router.post("/news-clips/ingest", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const hours = req.body?.hours ? Number(req.body.hours) : undefined;
+    const result = await ingestYoutubeNewsClips({ hours });
+    res.json(
+      decodeObject({
+        ok: true,
+        ...result,
+      } as Record<string, any>)
+    );
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 /**
  * GET /api/admin/news-clips/issues
- * 클립 이슈(ClipIssue) 목록
  */
-router.get(
-  "/news-clips/issues",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const take = req.query.take ? Number(req.query.take) : 100;
+router.get("/news-clips/issues", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const take = req.query.take ? Number(req.query.take) : 100;
 
-      const issues = await prisma.clipIssue.findMany({
-        take,
-        orderBy: { createdAt: "desc" },
-        include: {
-          _count: {
-            select: {
-              clips: true,
-              comments: true,
-            },
+    const issues = await prisma.clipIssue.findMany({
+      take,
+      orderBy: { createdAt: "desc" },
+      include: {
+        _count: {
+          select: {
+            clips: true,
+            comments: true,
           },
         },
-      });
+      },
+    });
 
-      // 프론트 타입(AdminClipIssue)에 맞게 매핑
-      const items = issues.map((issue) => ({
-        id: issue.id,
-        title: issue.title,
-        description: issue.description,
-        category: issue.category,
-        thumbnail: issue.thumbnail,
-        isHot: issue.isHot,
-        aiSummary: issue.aiSummary,
-        progressiveSummary: issue.progressiveSummary,
-        conservativeSummary: issue.conservativeSummary,
-        glossaryText: issue.glossaryText,
-        clipCount: issue.clipCount,
-        totalViews: issue.totalViews,
-        createdAt: issue.createdAt,
-        updatedAt: issue.updatedAt,
-        _count: issue._count,
-      }));
+    const items = issues.map((issue) => ({
+      id: issue.id,
+      title: issue.title,
+      description: issue.description,
+      category: issue.category,
+      thumbnail: issue.thumbnail,
+      isHot: issue.isHot,
+      aiSummary: issue.aiSummary,
+      progressiveSummary: issue.progressiveSummary,
+      conservativeSummary: issue.conservativeSummary,
+      glossaryText: issue.glossaryText,
+      clipCount: issue.clipCount,
+      totalViews: issue.totalViews,
+      createdAt: issue.createdAt,
+      updatedAt: issue.updatedAt,
+      _count: issue._count,
+    }));
 
-      res.json({ items: items.map((i) => decodeObject(i)) });
-    } catch (err) {
-      next(err);
-    }
+    res.json({ items: items.map((i) => decodeObject(i)) });
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 /**
  * POST /api/admin/news-clips/cluster
- * RawClip → ClipClusterSuggestion 생성
  */
-router.post(
-  "/news-clips/cluster",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const minGroupSize = req.body?.minGroupSize
-        ? Number(req.body.minGroupSize)
-        : undefined;
+router.post("/news-clips/cluster", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const minGroupSize = req.body?.minGroupSize ? Number(req.body.minGroupSize) : undefined;
+    const result = await clusterYoutubeNewsClips({ minGroupSize });
 
-      const result = await clusterYoutubeNewsClips({ minGroupSize });
-
-      res.json(
-        decodeObject({
-          ...result,
-          ok: true,
-        } as Record<string, any>)
-      );
-    } catch (err) {
-      next(err);
-    }
+    res.json(
+      decodeObject({
+        ...result,
+        ok: true,
+      } as Record<string, any>)
+    );
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 /**
  * GET /api/admin/news-clips/raw
- * 디버그용: 최근 RawClip 리스트
  */
-router.get(
-  "/news-clips/raw",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const take = req.query.take ? Number(req.query.take) : 50;
+router.get("/news-clips/raw", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const take = req.query.take ? Number(req.query.take) : 50;
 
-      const clips = await prisma.rawClip.findMany({
-        orderBy: [
-          { publishedAt: "desc" },
-          { createdAt: "desc" },
-        ],
-        take,
-      });
+    const clips = await prisma.rawClip.findMany({
+      orderBy: [{ publishedAt: "desc" }, { createdAt: "desc" }],
+      take,
+    });
 
-      // 🔵 YTN 같은 특정 채널 디버깅용
-      const ytnClips = clips.filter((c) =>
-        (c.channel ?? "").toLowerCase().includes("ytn")
-      );
+    const ytnClips = clips.filter((c) => (c.channel ?? "").toLowerCase().includes("ytn"));
 
-      console.log("[DEBUG /admin/news-clips/raw] total:", clips.length);
-      console.log(
-        "[DEBUG /admin/news-clips/raw] YTN clips in response:",
-        ytnClips.length,
-        ytnClips.slice(0, 3).map((c) => ({
-          id: c.id,
-          title: c.title,
-          channel: c.channel,
-          publishedAt: c.publishedAt,
-          createdAt: c.createdAt,
-        }))
-      );
+    console.log("[DEBUG /admin/news-clips/raw] total:", clips.length);
+    console.log(
+      "[DEBUG /admin/news-clips/raw] YTN clips in response:",
+      ytnClips.length,
+      ytnClips.slice(0, 3).map((c) => ({
+        id: c.id,
+        title: c.title,
+        channel: c.channel,
+        publishedAt: c.publishedAt,
+        createdAt: c.createdAt,
+      }))
+    );
 
-      res.json({
-        items: clips.map((c) => decodeObject(c as any)),
-      });
-    } catch (err) {
-      next(err);
-    }
+    res.json({
+      items: clips.map((c) => decodeObject(c as any)),
+    });
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 /**
  * GET /api/admin/news-clips/clusters
- * 클립 클러스터(ClipClusterSuggestion) 목록
  */
-router.get(
-  "/news-clips/clusters",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const take = req.query.take ? Number(req.query.take) : 50;
+router.get("/news-clips/clusters", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const take = req.query.take ? Number(req.query.take) : 50;
 
-      // 쿼리에서 status 받되, 기본값은 "PENDING"
-      const status =
-        (req.query.status as string | undefined) ?? "PENDING";
+    const status = (req.query.status as string | undefined) ?? "PENDING";
 
-      const items = await prisma.clipClusterSuggestion.findMany({
-        where: {
-          status: status as any, // "PENDING" | "APPROVED" | "REJECTED"
-        },
-        orderBy: { createdAt: "desc" },
-        take,
-        include: {
-          items: {
-            include: {
-              rawClip: true,
-            },
+    const items = await prisma.clipClusterSuggestion.findMany({
+      where: { status: status as any },
+      orderBy: { createdAt: "desc" },
+      take,
+      include: {
+        items: {
+          include: {
+            rawClip: true,
           },
         },
-      });
+      },
+    });
 
-      res.json({
-        items: items.map((i) => decodeObject(i as any)),
-      });
-    } catch (err) {
-      next(err);
-    }
+    res.json({
+      items: items.map((i) => decodeObject(i as any)),
+    });
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 /**
  * POST /api/admin/news-clips/approve
- * ClipClusterSuggestion → ClipIssue로 승격
- * body: { clusterId: string }
  */
-router.post(
-  "/news-clips/approve",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const { clusterId } = req.body as { clusterId?: string };
+router.post("/news-clips/approve", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const { clusterId } = req.body as { clusterId?: string };
 
-      if (!clusterId) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "clusterId is required" });
-      }
-
-      // 1) 클러스터 조회 (아이템 + rawClip 포함)
-      const cluster = await prisma.clipClusterSuggestion.findUnique({
-        where: { id: clusterId },
-        include: {
-          items: {
-            include: {
-              rawClip: true,
-            },
-          },
-        },
-      });
-
-      if (!cluster) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Cluster not found" });
-      }
-
-      if (cluster.items.length === 0) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "Cluster has no items" });
-      }
-
-      // 2) 대표 썸네일/카테고리 등 간단 결정
-      const firstItem = cluster.items[0];
-      const firstRaw = firstItem.rawClip;
-
-      const title = cluster.title || "유튜브 뉴스 클립 이슈";
-      const description = cluster.summary ?? null;
-      const thumbnail = firstRaw?.thumbnail ?? null;
-
-      // 3) ClipIssue 생성 + ClipIssueClip 연결
-      const issue = await prisma.clipIssue.create({
-        data: {
-          title,
-          description,
-          thumbnail,
-          isHot: false,
-          clipCount: cluster.items.length,
-          totalViews: 0,
-          clips: {
-            create: cluster.items
-              .filter((item) => item.rawClipId || item.rawClip?.id)
-              .map((item) => ({
-                rawClip: {
-                  connect: {
-                    id: item.rawClipId ?? item.rawClip!.id,
-                  },
-                },
-                side: (item.side as any) ?? item.rawClip?.side ?? "neutral",
-              })),
-          },
-        },
-      });
-
-      // 4) 클러스터 상태 + clipIssueId 업데이트 (추적용)
-      await prisma.clipClusterSuggestion.update({
-        where: { id: cluster.id },
-        data: {
-          status: "APPROVED",
-          clipIssueId: issue.id,
-        },
-      });
-
-      // 5) 프론트가 바로 편집 페이지로 이동할 수 있도록 issueId 반환
-      res.json({
-        ok: true,
-        issueId: issue.id,
-      });
-    } catch (err) {
-      next(err);
+    if (!clusterId) {
+      return res.status(400).json({ ok: false, error: "clusterId is required" });
     }
+
+    const cluster = await prisma.clipClusterSuggestion.findUnique({
+      where: { id: clusterId },
+      include: {
+        items: {
+          include: {
+            rawClip: true,
+          },
+        },
+      },
+    });
+
+    if (!cluster) {
+      return res.status(404).json({ ok: false, error: "Cluster not found" });
+    }
+
+    if (cluster.items.length === 0) {
+      return res.status(400).json({ ok: false, error: "Cluster has no items" });
+    }
+
+    const firstItem = cluster.items[0];
+    const firstRaw = firstItem.rawClip;
+
+    const title = cluster.title || "유튜브 뉴스 클립 이슈";
+    const description = cluster.summary ?? null;
+    const thumbnail = firstRaw?.thumbnail ?? null;
+
+    const issue = await prisma.clipIssue.create({
+      data: {
+        title,
+        description,
+        thumbnail,
+        isHot: false,
+        clipCount: cluster.items.length,
+        totalViews: 0,
+        clips: {
+          create: cluster.items
+            .filter((item) => item.rawClipId || item.rawClip?.id)
+            .map((item) => ({
+              rawClip: {
+                connect: {
+                  id: item.rawClipId ?? item.rawClip!.id,
+                },
+              },
+              side: (item.side as any) ?? item.rawClip?.side ?? "neutral",
+            })),
+        },
+      },
+    });
+
+    await prisma.clipClusterSuggestion.update({
+      where: { id: cluster.id },
+      data: {
+        status: "APPROVED",
+        clipIssueId: issue.id,
+      },
+    });
+
+    res.json({
+      ok: true,
+      issueId: issue.id,
+    });
+  } catch (err) {
+    next(err);
   }
-);
+});
 
 /**
  * GET /api/admin/news-clips/issues/:id
- * 클립 이슈 상세
  */
-router.get(
-  "/news-clips/issues/:id",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const id = req.params.id;
+router.get("/news-clips/issues/:id", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const id = req.params.id;
 
-      const issue = await prisma.clipIssue.findUnique({
-        where: { id },
-        include: {
-          clips: {
-            include: { rawClip: true },
-          },
-           talkingPoints: {
-            orderBy: { order: "asc" }, // 쟁점 순서대로
-          },
-        },
-      });
+    const issue = await prisma.clipIssue.findUnique({
+      where: { id },
+      include: {
+        clips: { include: { rawClip: true } },
+        talkingPoints: { orderBy: { order: "asc" } },
+      },
+    });
 
-      if (!issue) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Clip issue not found" });
-      }
-
-      // rawClip 배열만 뽑아서 프론트가 쓰기 쉽게 정리
-      const rawClips = issue.clips.map((ic) => ic.rawClip);
-
-      // 🔗 이 클립 이슈와 연관된 다른 클립 이슈 조회
-      const relations = await prisma.clipIssueRelation.findMany({
-        where: {
-          OR: [{ fromClipIssueId: id }, { toClipIssueId: id }],
-        },
-        include: {
-          from: true,
-          to: true,
-        },
-      });
-
-      // target 이슈만 뽑아서 중복 제거
-      const relatedMap = new Map<string, any>();
-      for (const r of relations) {
-        const target = r.fromClipIssueId === id ? r.to : r.from;
-
-        if (!target) continue;
-        if (target.id === id) continue;
-
-        if (!relatedMap.has(target.id)) {
-          relatedMap.set(target.id, {
-            id: target.id,
-            title: target.title,
-            description: target.description,
-            category: target.category,
-            thumbnail: target.thumbnail,
-            isHot: target.isHot,
-            aiSummary: target.aiSummary,
-            progressiveSummary: target.progressiveSummary,
-            conservativeSummary: target.conservativeSummary,
-            glossaryText: target.glossaryText,
-            clipCount: target.clipCount,
-            totalViews: target.totalViews,
-            createdAt: target.createdAt,
-            updatedAt: target.updatedAt,
-          });
-        }
-      }
-
-      const relatedClipIssues = Array.from(relatedMap.values());
-
-      res.json({
-        ok: true,
-        item: decodeObject({
-          ...issue,
-          clips: rawClips,
-          relatedClipIssues,
-        } as any),
-      });
-    } catch (err) {
-      next(err);
+    if (!issue) {
+      return res.status(404).json({ ok: false, error: "Clip issue not found" });
     }
+
+    const rawClips = issue.clips.map((ic) => ic.rawClip);
+
+    const relations = await prisma.clipIssueRelation.findMany({
+      where: { OR: [{ fromClipIssueId: id }, { toClipIssueId: id }] },
+      include: { from: true, to: true },
+    });
+
+    const relatedMap = new Map<string, any>();
+    for (const r of relations) {
+      const target = r.fromClipIssueId === id ? r.to : r.from;
+      if (!target) continue;
+      if (target.id === id) continue;
+
+      if (!relatedMap.has(target.id)) {
+        relatedMap.set(target.id, {
+          id: target.id,
+          title: target.title,
+          description: target.description,
+          category: target.category,
+          thumbnail: target.thumbnail,
+          isHot: target.isHot,
+          aiSummary: target.aiSummary,
+          progressiveSummary: target.progressiveSummary,
+          conservativeSummary: target.conservativeSummary,
+          glossaryText: target.glossaryText,
+          clipCount: target.clipCount,
+          totalViews: target.totalViews,
+          createdAt: target.createdAt,
+          updatedAt: target.updatedAt,
+        });
+      }
+    }
+
+    const relatedClipIssues = Array.from(relatedMap.values());
+
+    res.json({
+      ok: true,
+      item: decodeObject({
+        ...issue,
+        clips: rawClips,
+        relatedClipIssues,
+      } as any),
+    });
+  } catch (err) {
+    next(err);
   }
-);
+});
+
+/* =========================================================
+   ✅ (NEW) 등록 전 편집 페이지용 PREVIEW API
+   - DB 저장 없이 clipIds 기준으로 AI 생성
+   - 프론트에서 "생성" 버튼 눌렀을 때 여기 호출하면 됨
+========================================================= */
 
 /**
- * POST /api/admin/news-clips/issues
- * 클립 이슈 생성
- * body: { title, description, aiSummary, isHot, clipIds, fromClusterId?, glossaryText? }
+ * POST /api/admin/news-clips/preview/refresh-talking-points
+ * body: { title?, description?, aiSummary?, clipIds: string[] }
  */
 router.post(
-  "/news-clips/issues",
+  "/news-clips/preview/refresh-talking-points",
   requireAuth,
   adminAuth,
   async (req, res, next) => {
@@ -482,304 +443,24 @@ router.post(
         title?: string;
         description?: string | null;
         aiSummary?: string | null;
-        isHot?: boolean;
         clipIds?: string[];
-        fromClusterId?: string | null;
-        glossaryText?: string | null;
-        talkingPoints?: IncomingTalkingPoint[];
       };
 
-      const {
-        title,
-        description,
-        aiSummary,
-        isHot,
-        clipIds,
-        fromClusterId,
-        glossaryText,
-        talkingPoints,
-      } = body;
+      const title = body.title ?? "";
+      const description = body.description ?? "";
+      const aiSummary = body.aiSummary ?? "";
+      const clipIds = Array.isArray(body.clipIds) ? body.clipIds : [];
 
-      if (!title || !clipIds || clipIds.length === 0) {
-        return res.status(400).json({
-          ok: false,
-          error: "title과 clipIds는 필수입니다.",
-        });
+      if (!clipIds.length) {
+        return res.status(400).json({ ok: false, error: "clipIds is required" });
       }
 
-      // side NOT NULL 보호: rawClip에서 side 가져오기
-      const rawClipsInIssue = await prisma.rawClip.findMany({
-        where: {
-          id: { in: clipIds },
-        },
-      });
-
-      if (rawClipsInIssue.length === 0) {
-        return res.status(400).json({
-          ok: false,
-          error: "유효한 rawClip이 없습니다.",
-        });
+      const rawClips = await loadRawClipsForPreview(clipIds);
+      if (!rawClips.length) {
+        return res.status(400).json({ ok: false, error: "유효한 rawClip이 없습니다." });
       }
 
-      const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
-
-      const issue = await prisma.clipIssue.create({
-        data: {
-          title,
-          description: description ?? null,
-          aiSummary: aiSummary ?? null,
-          isHot: !!isHot,
-          clipCount: clipIds.length,
-          totalViews: 0,
-          glossaryText: glossaryText ?? null,
-          clips: {
-            create: rawClipsInIssue.map((c) => ({
-              rawClip: { connect: { id: c.id } },
-              side: (c.side as any) ?? "neutral",
-            })),
-          },
-          ...(cleanedTalkingPoints && {
-            talkingPoints: {
-              create: cleanedTalkingPoints,
-            },
-          }),
-        },
-        include: {
-          clips: { include: { rawClip: true } },
-          talkingPoints: { orderBy: { order: "asc" } },
-        },
-      });
-
-      // fromClusterId 있으면 클러스터와 연결 + 상태 APPROVED
-      if (fromClusterId) {
-        try {
-          await prisma.clipClusterSuggestion.update({
-            where: { id: fromClusterId },
-            data: {
-              status: "APPROVED",
-              clipIssueId: issue.id,
-            },
-          });
-        } catch (e) {
-          console.error(
-            "⚠️ clipClusterSuggestion link/update failed:",
-            e
-          );
-        }
-      }
-
-      const rawClips = issue.clips.map((ic) => ic.rawClip);
-
-      res.json({
-        ok: true,
-        item: decodeObject({
-          ...issue,
-          clips: rawClips,
-        } as any),
-      });
-    } catch (err) {
-      console.error("❌ [POST /admin/news-clips/issues] error:", err);
-      next(err);
-    }
-  }
-);
-
-/**
- * PATCH /api/admin/news-clips/issues/:id
- * 클립 이슈 수정
- */
-router.patch(
-  "/news-clips/issues/:id",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const id = req.params.id;
-
-      const body = req.body as {
-        title?: string;
-        description?: string | null;
-        aiSummary?: string | null;
-        isHot?: boolean;
-        clipIds?: string[];
-        glossaryText?: string | null;
-        talkingPoints?: IncomingTalkingPoint[];
-      };
-
-      const {
-        title,
-        description,
-        aiSummary,
-        isHot,
-        clipIds,
-        glossaryText,
-        talkingPoints,
-      } = body;
-
-      const clipIdsSafe = clipIds ?? [];
-
-      // side 설정을 위해 rawClip 먼저 조회
-      const rawClipsInIssue = clipIdsSafe.length
-        ? await prisma.rawClip.findMany({
-            where: { id: { in: clipIdsSafe } },
-          })
-        : [];
-
-      const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
-
-      const data: any = {
-        title,
-        description: description ?? null,
-        aiSummary: aiSummary ?? null,
-        isHot: !!isHot,
-        clipCount: clipIdsSafe.length,
-        glossaryText: glossaryText ?? null,
-        clips: {
-          deleteMany: {}, // 이전 연결 전부 제거
-          create: rawClipsInIssue.map((c) => ({
-            rawClip: { connect: { id: c.id } },
-            side: (c.side as any) ?? "neutral",
-          })),
-        },
-      };
-
-      // 쟁점이 넘어온 경우에만 갈아끼우기
-      if (cleanedTalkingPoints) {
-        data.talkingPoints = {
-          deleteMany: {},
-          create: cleanedTalkingPoints,
-        };
-      }
-
-      const issue = await prisma.clipIssue.update({
-        where: { id },
-        data,
-        include: {
-          clips: { include: { rawClip: true } },
-          talkingPoints: { orderBy: { order: "asc" } },
-        },
-      });
-
-      const rawClips = issue.clips.map((ic) => ic.rawClip);
-
-      res.json({
-        ok: true,
-        item: decodeObject({
-          ...issue,
-          clips: rawClips,
-        } as any),
-      });
-    } catch (err) {
-      console.error("❌ [PATCH /admin/news-clips/issues/:id] error:", err);
-      next(err);
-    }
-  }
-);
-
-
-// 🔗 클립 이슈 연관 관계 저장
-// POST /api/admin/news-clips/issues/:id/relations
-router.post(
-  "/news-clips/issues/:id/relations",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const clipIssueId = req.params.id;
-      const { targetIds } = req.body as {
-        targetIds?: string[];
-      };
-
-      if (!Array.isArray(targetIds)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "targetIds must be an array" });
-      }
-
-      // 자기 자신 제거 + 중복 제거
-      const uniqueTargetIds = Array.from(
-        new Set(
-          targetIds.filter((tid) => tid && tid !== clipIssueId)
-        )
-      );
-
-      // 존재하는 클립 이슈만 필터
-      const existingTargets = await prisma.clipIssue.findMany({
-        where: { id: { in: uniqueTargetIds } },
-        select: { id: true },
-      });
-      const validTargetIds = existingTargets.map((t) => t.id);
-
-      // 기본 정책:
-      // - "이 이슈에서 나가는(from) 연관 관계" 전체를 덮어쓴다.
-      await prisma.clipIssueRelation.deleteMany({
-        where: { fromClipIssueId: clipIssueId },
-      });
-
-      if (validTargetIds.length > 0) {
-        await prisma.clipIssueRelation.createMany({
-          data: validTargetIds.map((tid) => ({
-            fromClipIssueId: clipIssueId,
-            toClipIssueId: tid,
-            relationType: "RELATED",
-            confidence: null,
-          })),
-          skipDuplicates: true,
-        });
-      }
-
-      return res.json({ ok: true });
-    } catch (err) {
-      console.error(
-        "❌ [POST /admin/news-clips/issues/:id/relations] error:",
-        err
-      );
-      next(err);
-    }
-  }
-);
-
-/**
- * 🔄 클립 이슈 쟁점 리스트(AI) 재생성
- * POST /api/admin/news-clips/issues/:id/refresh-talking-points
- */
-router.post(
-  "/news-clips/issues/:id/refresh-talking-points",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const { id } = req.params as { id: string };
-
-      const issue = await prisma.clipIssue.findUnique({
-        where: { id },
-        include: {
-          clips: {
-            include: { rawClip: true },
-          },
-        },
-      });
-
-      if (!issue) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Clip issue not found" });
-      }
-
-      // 🔍 컨텍스트: 포함된 클립 리스트
-      const clipsSummary = (issue.clips ?? [])
-        .map((c) => {
-          const side =
-            c.side === "left"
-              ? "진보"
-              : c.side === "right"
-              ? "보수"
-              : "중립";
-          const title = c.rawClip?.title ?? "(제목 없음)";
-          const channel = c.rawClip?.channel ?? "채널";
-          return `- [${side}] ${channel}: ${title}`;
-        })
-        .join("\n");
+      const clipsSummary = buildClipsSummaryForPrompt(rawClips);
 
       const prompt = `
 너는 한국어로 유튜브 뉴스 클립 이슈의 핵심 쟁점을 뽑는 에디터야.
@@ -788,33 +469,27 @@ router.post(
 "어디에 집중해서 봐야 하는지"를 알려주는 쟁점 리스트를 만들어라.
 
 [이슈 제목]
-${issue.title ?? ""}
+${title}
 
 [이슈 설명]
-${issue.description ?? ""}
+${description}
 
 [AI 요약]
-${issue.aiSummary ?? ""}
+${aiSummary}
 
 [포함된 클립 목록]
 ${clipsSummary || "(클립 정보 없음)"}
 
-다음 규칙을 지켜라.
-
-1. JSON 배열만 출력한다. (설명 금지)
-2. 각 항목은 다음 필드를 가진다.
-   - order: 숫자 (1부터 시작, 정렬용)
-   - title: 쟁점 제목 (짧게, 한 줄)
-   - body: 이 쟁점이 무엇이고 왜 중요한지 2~3문장으로 설명
-   - kind: 아래 중 하나 (문자열)
-     * "fact"     : 핵심 사실/배경 정리
-     * "conflict" : 갈등·대립 구조
-     * "impact"   : 시민/사회에 미치는 영향
-     * "future"   : 향후 전개·쟁점
-     * "etc"      : 위에 안 들어가면 etc
-3. 쟁점은 3~7개 정도로 만든다.
-4. 모든 내용은 한국어로 작성한다.
-`;
+규칙:
+1) JSON 배열만 출력 (설명 금지)
+2) 각 항목 필드:
+   - order (1부터)
+   - title (짧게)
+   - body (2~3문장)
+   - kind: "fact" | "conflict" | "impact" | "future" | "etc"
+3) 3~7개
+4) 한국어
+`.trim();
 
       const completion = await openai.chat.completions.create({
         model: "gpt-4.1-mini",
@@ -836,22 +511,11 @@ ${clipsSummary || "(클립 정보 없음)"}
         const tmp = JSON.parse(raw);
         if (Array.isArray(tmp)) parsed = tmp;
       } catch (e) {
-        console.error(
-          "[refresh-talking-points clips] JSON parse error:",
-          e,
-          "raw=",
-          raw
-        );
+        console.error("[preview refresh-talking-points] JSON parse error:", e, "raw=", raw);
       }
 
-      // 최소 검증/클린업
-      const talkingPoints = parsed
-        .filter(
-          (p) =>
-            p &&
-            typeof p.title === "string" &&
-            typeof p.body === "string"
-        )
+      const items = parsed
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
         .slice(0, 7)
         .map((p, idx) => ({
           order: typeof p.order === "number" ? p.order : idx + 1,
@@ -860,12 +524,478 @@ ${clipsSummary || "(클립 정보 없음)"}
           kind: typeof p.kind === "string" ? p.kind : "etc",
         }));
 
-      // Prisma relation(talkingPoints) 전체 갈아끼우기
+      return res.json({ ok: true, items: decodeObject(items as any) });
+    } catch (err) {
+      console.error("❌ [POST /admin/news-clips/preview/refresh-talking-points] error:", err);
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/news-clips/preview/refresh-glossary
+ * body: { title?, description?, aiSummary?, clipIds: string[] }
+ */
+router.post(
+  "/news-clips/preview/refresh-glossary",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const body = req.body as {
+        title?: string;
+        description?: string | null;
+        aiSummary?: string | null;
+        clipIds?: string[];
+      };
+
+      const title = body.title ?? "";
+      const description = body.description ?? null;
+      const aiSummary = body.aiSummary ?? null;
+      const clipIds = Array.isArray(body.clipIds) ? body.clipIds : [];
+
+      if (!clipIds.length) {
+        return res.status(400).json({ ok: false, error: "clipIds is required" });
+      }
+
+      const rawClips = await loadRawClipsForPreview(clipIds);
+      if (!rawClips.length) {
+        return res.status(400).json({ ok: false, error: "유효한 rawClip이 없습니다." });
+      }
+
+      const clipsText = buildClipsTextForGlossary(rawClips);
+
+      const glossaryText = await generateGlossaryText({
+        title: title || "뉴스 클립 이슈",
+        summary: aiSummary ?? description ?? null,
+        itemsText: clipsText,
+        locale: "ko",
+        sourceType: "clip",
+      });
+
+      return res.json({
+        ok: true,
+        item: decodeObject({ glossaryText: glossaryText ?? null } as any),
+      });
+    } catch (err) {
+      console.error("❌ [POST /admin/news-clips/preview/refresh-glossary] error:", err);
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/news-clips/preview/refresh-ai
+ * body: { title?, description?, aiSummary?, clipIds: string[] }
+ * -> talkingPoints + glossaryText 한 번에 받기
+ */
+router.post(
+  "/news-clips/preview/refresh-ai",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const body = req.body as {
+        title?: string;
+        description?: string | null;
+        aiSummary?: string | null;
+        clipIds?: string[];
+      };
+
+      const title = body.title ?? "";
+      const description = body.description ?? "";
+      const aiSummary = body.aiSummary ?? "";
+      const clipIds = Array.isArray(body.clipIds) ? body.clipIds : [];
+
+      if (!clipIds.length) {
+        return res.status(400).json({ ok: false, error: "clipIds is required" });
+      }
+
+      const rawClips = await loadRawClipsForPreview(clipIds);
+      if (!rawClips.length) {
+        return res.status(400).json({ ok: false, error: "유효한 rawClip이 없습니다." });
+      }
+
+      const clipsSummary = buildClipsSummaryForPrompt(rawClips);
+      const clipsText = buildClipsTextForGlossary(rawClips);
+
+      const tpPrompt = `
+너는 한국어로 유튜브 뉴스 클립 이슈의 핵심 쟁점을 뽑는 에디터야.
+
+[이슈 제목]
+${title}
+
+[이슈 설명]
+${description}
+
+[AI 요약]
+${aiSummary}
+
+[포함된 클립 목록]
+${clipsSummary || "(클립 정보 없음)"}
+
+규칙:
+1) JSON 배열만 출력
+2) 각 항목: order/title/body/kind ("fact"|"conflict"|"impact"|"future"|"etc")
+3) 3~7개
+`.trim();
+
+      const [tpCompletion, glossaryText] = await Promise.all([
+        openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [
+            {
+              role: "system",
+              content:
+                "너는 한국 정치·사회 이슈의 쟁점 리스트를 만드는 한국어 에디터이다. 반드시 JSON 배열만 출력한다.",
+            },
+            { role: "user", content: tpPrompt },
+          ],
+          temperature: 0.4,
+        }),
+        generateGlossaryText({
+          title: title || "뉴스 클립 이슈",
+          summary: aiSummary || description || null,
+          itemsText: clipsText,
+          locale: "ko",
+          sourceType: "clip",
+        }),
+      ]);
+
+      const raw = tpCompletion.choices[0]?.message?.content ?? "[]";
+      let parsed: any[] = [];
+      try {
+        const tmp = JSON.parse(raw);
+        if (Array.isArray(tmp)) parsed = tmp;
+      } catch (e) {
+        console.error("[preview refresh-ai] JSON parse error:", e, "raw=", raw);
+      }
+
+      const talkingPoints = parsed
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
+        .slice(0, 7)
+        .map((p, idx) => ({
+          order: typeof p.order === "number" ? p.order : idx + 1,
+          title: String(p.title).slice(0, 100),
+          body: String(p.body).slice(0, 800),
+          kind: typeof p.kind === "string" ? p.kind : "etc",
+        }));
+
+      return res.json({
+        ok: true,
+        item: decodeObject({
+          glossaryText: glossaryText ?? null,
+          talkingPoints,
+        } as any),
+      });
+    } catch (err) {
+      console.error("❌ [POST /admin/news-clips/preview/refresh-ai] error:", err);
+      next(err);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/news-clips/issues
+ */
+router.post("/news-clips/issues", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const body = req.body as {
+      title?: string;
+      description?: string | null;
+      aiSummary?: string | null;
+      isHot?: boolean;
+      clipIds?: string[];
+      fromClusterId?: string | null;
+      glossaryText?: string | null;
+      talkingPoints?: IncomingTalkingPoint[];
+    };
+
+    const { title, description, aiSummary, isHot, clipIds, fromClusterId, glossaryText, talkingPoints } = body;
+
+    if (!title || !clipIds || clipIds.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "title과 clipIds는 필수입니다.",
+      });
+    }
+
+    const rawClipsInIssue = await prisma.rawClip.findMany({
+      where: { id: { in: clipIds } },
+    });
+
+    if (rawClipsInIssue.length === 0) {
+      return res.status(400).json({
+        ok: false,
+        error: "유효한 rawClip이 없습니다.",
+      });
+    }
+
+    const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
+
+    const issue = await prisma.clipIssue.create({
+      data: {
+        title,
+        description: description ?? null,
+        aiSummary: aiSummary ?? null,
+        isHot: !!isHot,
+        clipCount: clipIds.length,
+        totalViews: 0,
+        glossaryText: glossaryText ?? null,
+        clips: {
+          create: rawClipsInIssue.map((c) => ({
+            rawClip: { connect: { id: c.id } },
+            side: (c.side as any) ?? "neutral",
+          })),
+        },
+        ...(cleanedTalkingPoints && {
+          talkingPoints: {
+            create: cleanedTalkingPoints,
+          },
+        }),
+      },
+      include: {
+        clips: { include: { rawClip: true } },
+        talkingPoints: { orderBy: { order: "asc" } },
+      },
+    });
+
+    if (fromClusterId) {
+      try {
+        await prisma.clipClusterSuggestion.update({
+          where: { id: fromClusterId },
+          data: {
+            status: "APPROVED",
+            clipIssueId: issue.id,
+          },
+        });
+      } catch (e) {
+        console.error("⚠️ clipClusterSuggestion link/update failed:", e);
+      }
+    }
+
+    const rawClips = issue.clips.map((ic) => ic.rawClip);
+
+    res.json({
+      ok: true,
+      item: decodeObject({
+        ...issue,
+        clips: rawClips,
+      } as any),
+    });
+  } catch (err) {
+    console.error("❌ [POST /admin/news-clips/issues] error:", err);
+    next(err);
+  }
+});
+
+/**
+ * PATCH /api/admin/news-clips/issues/:id
+ */
+router.patch("/news-clips/issues/:id", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const id = req.params.id;
+
+    const body = req.body as {
+      title?: string;
+      description?: string | null;
+      aiSummary?: string | null;
+      isHot?: boolean;
+      clipIds?: string[];
+      glossaryText?: string | null;
+      talkingPoints?: IncomingTalkingPoint[];
+    };
+
+    const { title, description, aiSummary, isHot, clipIds, glossaryText, talkingPoints } = body;
+
+    const clipIdsSafe = clipIds ?? [];
+
+    const rawClipsInIssue = clipIdsSafe.length
+      ? await prisma.rawClip.findMany({
+          where: { id: { in: clipIdsSafe } },
+        })
+      : [];
+
+    const cleanedTalkingPoints = sanitizeTalkingPoints(talkingPoints);
+
+    const data: any = {
+      title,
+      description: description ?? null,
+      aiSummary: aiSummary ?? null,
+      isHot: !!isHot,
+      clipCount: clipIdsSafe.length,
+      glossaryText: glossaryText ?? null,
+      clips: {
+        deleteMany: {},
+        create: rawClipsInIssue.map((c) => ({
+          rawClip: { connect: { id: c.id } },
+          side: (c.side as any) ?? "neutral",
+        })),
+      },
+    };
+
+    if (cleanedTalkingPoints) {
+      data.talkingPoints = {
+        deleteMany: {},
+        create: cleanedTalkingPoints,
+      };
+    }
+
+    const issue = await prisma.clipIssue.update({
+      where: { id },
+      data,
+      include: {
+        clips: { include: { rawClip: true } },
+        talkingPoints: { orderBy: { order: "asc" } },
+      },
+    });
+
+    const rawClips = issue.clips.map((ic) => ic.rawClip);
+
+    res.json({
+      ok: true,
+      item: decodeObject({
+        ...issue,
+        clips: rawClips,
+      } as any),
+    });
+  } catch (err) {
+    console.error("❌ [PATCH /admin/news-clips/issues/:id] error:", err);
+    next(err);
+  }
+});
+
+// 🔗 클립 이슈 연관 관계 저장
+router.post("/news-clips/issues/:id/relations", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const clipIssueId = req.params.id;
+    const { targetIds } = req.body as { targetIds?: string[] };
+
+    if (!Array.isArray(targetIds)) {
+      return res.status(400).json({ ok: false, error: "targetIds must be an array" });
+    }
+
+    const uniqueTargetIds = Array.from(new Set(targetIds.filter((tid) => tid && tid !== clipIssueId)));
+
+    const existingTargets = await prisma.clipIssue.findMany({
+      where: { id: { in: uniqueTargetIds } },
+      select: { id: true },
+    });
+    const validTargetIds = existingTargets.map((t) => t.id);
+
+    await prisma.clipIssueRelation.deleteMany({
+      where: { fromClipIssueId: clipIssueId },
+    });
+
+    if (validTargetIds.length > 0) {
+      await prisma.clipIssueRelation.createMany({
+        data: validTargetIds.map((tid) => ({
+          fromClipIssueId: clipIssueId,
+          toClipIssueId: tid,
+          relationType: "RELATED",
+          confidence: null,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("❌ [POST /admin/news-clips/issues/:id/relations] error:", err);
+    next(err);
+  }
+});
+
+/**
+ * 🔄 클립 이슈 쟁점 리스트(AI) 재생성 (DB 저장)
+ */
+router.post(
+  "/news-clips/issues/:id/refresh-talking-points",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const { id } = req.params as { id: string };
+
+      const issue = await prisma.clipIssue.findUnique({
+        where: { id },
+        include: {
+          clips: { include: { rawClip: true } },
+        },
+      });
+
+      if (!issue) {
+        return res.status(404).json({ ok: false, error: "Clip issue not found" });
+      }
+
+      const clipsSummary = (issue.clips ?? [])
+        .map((c) => {
+          const side = c.side === "left" ? "진보" : c.side === "right" ? "보수" : "중립";
+          const title = c.rawClip?.title ?? "(제목 없음)";
+          const channel = c.rawClip?.channel ?? "채널";
+          return `- [${side}] ${channel}: ${title}`;
+        })
+        .join("\n");
+
+      const prompt = `
+너는 한국어로 유튜브 뉴스 클립 이슈의 핵심 쟁점을 뽑는 에디터야.
+
+[이슈 제목]
+${issue.title ?? ""}
+
+[이슈 설명]
+${issue.description ?? ""}
+
+[AI 요약]
+${issue.aiSummary ?? ""}
+
+[포함된 클립 목록]
+${clipsSummary || "(클립 정보 없음)"}
+
+규칙:
+1) JSON 배열만 출력
+2) order/title/body/kind
+3) 3~7개
+`.trim();
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          {
+            role: "system",
+            content:
+              "너는 한국 정치·사회 이슈의 쟁점 리스트를 만드는 한국어 에디터이다. 반드시 JSON 배열만 출력한다.",
+          },
+          { role: "user", content: prompt },
+        ],
+        temperature: 0.4,
+      });
+
+      const raw = completion.choices[0]?.message?.content ?? "[]";
+
+      let parsed: any[] = [];
+      try {
+        const tmp = JSON.parse(raw);
+        if (Array.isArray(tmp)) parsed = tmp;
+      } catch (e) {
+        console.error("[refresh-talking-points clips] JSON parse error:", e, "raw=", raw);
+      }
+
+      const talkingPoints = parsed
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
+        .slice(0, 7)
+        .map((p, idx) => ({
+          order: typeof p.order === "number" ? p.order : idx + 1,
+          title: String(p.title).slice(0, 100),
+          body: String(p.body).slice(0, 800),
+          kind: typeof p.kind === "string" ? p.kind : "etc",
+        }));
+
       const updated = await prisma.clipIssue.update({
         where: { id },
         data: {
           talkingPoints: {
-            deleteMany: {}, // 기존 쟁점 전부 삭제
+            deleteMany: {},
             create: talkingPoints.map((tp) => ({
               order: tp.order,
               title: tp.title,
@@ -875,9 +1005,7 @@ ${clipsSummary || "(클립 정보 없음)"}
           },
         },
         include: {
-          talkingPoints: {
-            orderBy: { order: "asc" },
-          },
+          talkingPoints: { orderBy: { order: "asc" } },
         },
       });
 
@@ -886,10 +1014,7 @@ ${clipsSummary || "(클립 정보 없음)"}
         items: updated.talkingPoints,
       });
     } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/news-clips/issues/:id/refresh-talking-points] error:",
-        err
-      );
+      console.error("❌ [POST /api/admin/news-clips/issues/:id/refresh-talking-points] error:", err);
       next(err);
     }
   }
@@ -897,138 +1022,98 @@ ${clipsSummary || "(클립 정보 없음)"}
 
 /**
  * ✏️ 클립 이슈 쟁점 리스트 수동 저장
- * PUT /api/admin/news-clips/issues/:id/talking-points
- * body: { items: { order?: number; title: string; body: string; kind?: string | null; }[] }
  */
-router.put(
-  "/news-clips/issues/:id/talking-points",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const { id } = req.params as { id: string };
-      const { items } = req.body as {
-        items?: {
-          order?: number;
-          title: string;
-          body: string;
-          kind?: string | null;
-        }[];
-      };
+router.put("/news-clips/issues/:id/talking-points", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params as { id: string };
+    const { items } = req.body as {
+      items?: { order?: number; title: string; body: string; kind?: string | null }[];
+    };
 
-      if (!Array.isArray(items)) {
-        return res
-          .status(400)
-          .json({ ok: false, error: "items must be an array" });
-      }
+    if (!Array.isArray(items)) {
+      return res.status(400).json({ ok: false, error: "items must be an array" });
+    }
 
-      // 최소 유효성 + 기본값 정리
-      const cleaned = items
-        .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
-        .map((i, idx) => ({
-          order: typeof i.order === "number" ? i.order : idx + 1,
-          title: String(i.title).slice(0, 100),
-          body: String(i.body).slice(0, 800),
-          kind: i.kind ? String(i.kind) : "etc",
-        }));
+    const cleaned = items
+      .filter((i) => i && typeof i.title === "string" && typeof i.body === "string")
+      .map((i, idx) => ({
+        order: typeof i.order === "number" ? i.order : idx + 1,
+        title: String(i.title).slice(0, 100),
+        body: String(i.body).slice(0, 800),
+        kind: i.kind ? String(i.kind) : "etc",
+      }));
 
-      // 전부 갈아끼우기
-      const updated = await prisma.clipIssue.update({
-        where: { id },
-        data: {
-          talkingPoints: {
-            deleteMany: {},
-            create: cleaned,
-          },
+    const updated = await prisma.clipIssue.update({
+      where: { id },
+      data: {
+        talkingPoints: {
+          deleteMany: {},
+          create: cleaned,
         },
-        include: {
-          talkingPoints: { orderBy: { order: "asc" } },
-        },
-      });
+      },
+      include: {
+        talkingPoints: { orderBy: { order: "asc" } },
+      },
+    });
 
-      return res.json({
-        ok: true,
-        items: decodeObject(updated.talkingPoints as any),
-      });
-    } catch (err) {
-      console.error(
-        "❌ [PUT /admin/news-clips/issues/:id/talking-points] error:",
-        err
-      );
-      next(err);
-    }
+    return res.json({
+      ok: true,
+      items: decodeObject(updated.talkingPoints as any),
+    });
+  } catch (err) {
+    console.error("❌ [PUT /admin/news-clips/issues/:id/talking-points] error:", err);
+    next(err);
   }
-);
+});
 
+/**
+ * 🔄 클립 이슈 AI 요약 재생성
+ */
+router.post("/news-clips/issues/:id/refresh-summary", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params as { id: string };
 
-// 🔄 클립 이슈 AI 요약 + 진영별 요약 재생성
-// POST /api/admin/news-clips/issues/:id/refresh-summary
-router.post(
-  "/news-clips/issues/:id/refresh-summary",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const { id } = req.params as { id: string };
+    const updated = await refreshClipIssueAIFields(id);
 
-      // aiSummary + 좌/우 요약 모두 갱신
-      const updated = await refreshClipIssueAIFields(id);
-
-      if (!updated) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Clip issue not found" });
-      }
-
-      return res.json({
-        ok: true,
-        item: decodeObject({
-          aiSummary: updated.aiSummary ?? null,
-        } as Record<string, any>),
-      });
-    } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/news-clips/issues/:id/refresh-summary] error:",
-        err
-      );
-      next(err);
+    if (!updated) {
+      return res.status(404).json({ ok: false, error: "Clip issue not found" });
     }
+
+    return res.json({
+      ok: true,
+      item: decodeObject({
+        aiSummary: updated.aiSummary ?? null,
+      } as Record<string, any>),
+    });
+  } catch (err) {
+    console.error("❌ [POST /api/admin/news-clips/issues/:id/refresh-summary] error:", err);
+    next(err);
   }
-);
+});
 
-// 🔄 클립 이슈 용어 사전 재생성
-// POST /api/admin/news-clips/issues/:id/refresh-glossary
-router.post(
-  "/news-clips/issues/:id/refresh-glossary",
-  requireAuth,
-  adminAuth,
-  async (req, res, next) => {
-    try {
-      const { id } = req.params as { id: string };
+/**
+ * 🔄 클립 이슈 용어 사전 재생성
+ */
+router.post("/news-clips/issues/:id/refresh-glossary", requireAuth, adminAuth, async (req, res, next) => {
+  try {
+    const { id } = req.params as { id: string };
 
-      const updated = await refreshClipIssueGlossary(id);
+    const updated = await refreshClipIssueGlossary(id);
 
-      if (!updated) {
-        return res
-          .status(404)
-          .json({ ok: false, error: "Clip issue not found" });
-      }
-
-      return res.json({
-        ok: true,
-        item: decodeObject({
-          glossaryText: updated.glossaryText ?? null,
-        } as Record<string, any>),
-      });
-    } catch (err) {
-      console.error(
-        "❌ [POST /api/admin/news-clips/issues/:id/refresh-glossary] error:",
-        err
-      );
-      next(err);
+    if (!updated) {
+      return res.status(404).json({ ok: false, error: "Clip issue not found" });
     }
-  }
-);
 
+    return res.json({
+      ok: true,
+      item: decodeObject({
+        glossaryText: updated.glossaryText ?? null,
+      } as Record<string, any>),
+    });
+  } catch (err) {
+    console.error("❌ [POST /api/admin/news-clips/issues/:id/refresh-glossary] error:", err);
+    next(err);
+  }
+});
 
 export default router;
