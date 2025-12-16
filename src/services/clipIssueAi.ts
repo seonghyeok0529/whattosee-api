@@ -369,3 +369,175 @@ export async function refreshClipIssueGlossary(clipIssueId: string) {
     select: { id: true, glossaryText: true },
   });
 }
+
+
+router.post(
+  "/news-clips/preview-ai",
+  requireAuth,
+  adminAuth,
+  async (req, res, next) => {
+    try {
+      const body = req.body as {
+        title?: string | null;
+        description?: string | null;
+        aiSummary?: string | null;
+        clipIds?: string[];
+      };
+
+      const clipIds = Array.isArray(body.clipIds) ? body.clipIds : [];
+      if (clipIds.length === 0) {
+        return res.status(400).json({ ok: false, error: "clipIds is required" });
+      }
+
+      const rawClips = await prisma.rawClip.findMany({
+        where: { id: { in: clipIds } },
+        select: {
+          id: true,
+          title: true,
+          channel: true,
+          side: true,
+          description: true,
+          text: true,
+        },
+      });
+
+      if (rawClips.length === 0) {
+        return res.status(400).json({ ok: false, error: "No valid rawClips" });
+      }
+
+      const clipLines = rawClips
+        .map((r, i) => {
+          const side =
+            r.side === "left"
+              ? "진보"
+              : r.side === "right"
+              ? "보수"
+              : r.side === "center"
+              ? "중도"
+              : "중립";
+          return `- [${i + 1}] ${r.channel ?? "채널"} (${side}): ${r.title ?? "(제목 없음)"}`;
+        })
+        .join("\n");
+
+      const title = (body.title ?? "").trim() || "뉴스 클립 이슈";
+      const baseDesc = (body.description ?? "").trim();
+
+      // 1) aiSummary (이미 있으면 재사용, 없으면 생성)
+      let aiSummary = (body.aiSummary ?? "").trim();
+      if (!aiSummary) {
+        const prompt = `
+다음은 여러 뉴스 클립을 묶은 '클립 이슈'다.
+제목/채널/성향 정보만으로 2~3문장 중립 요약을 작성해라.
+
+주의:
+- 실제 영상을 본 것처럼 구체 발언을 상상하지 말 것
+- 감정적 표현 금지, 분석적 톤 유지
+
+[이슈 제목]
+${title}
+
+[이슈 설명(있으면 참고)]
+${baseDesc || "(없음)"}
+
+[포함된 클립 목록]
+${clipLines}
+
+출력: 2~3문장 요약
+`.trim();
+
+        const completion = await openai.chat.completions.create({
+          model: "gpt-4.1-mini",
+          messages: [
+            { role: "system", content: "너는 한국 이슈를 중립적으로 요약하는 편집자다." },
+            { role: "user", content: prompt },
+          ],
+          temperature: 0.3,
+        });
+
+        aiSummary = completion.choices?.[0]?.message?.content?.trim() ?? "";
+      }
+
+      // 2) talkingPoints (JSON 배열로)
+      const tpPrompt = `
+너는 한국어로 뉴스 클립 이슈의 쟁점 리스트를 만드는 에디터다.
+
+[이슈 제목]
+${title}
+
+[이슈 설명]
+${baseDesc || ""}
+
+[AI 요약]
+${aiSummary || ""}
+
+[포함된 클립 목록]
+${clipLines}
+
+규칙:
+1) JSON 배열만 출력
+2) 각 항목 필드:
+- order:number (1부터)
+- title:string (짧게)
+- body:string (2~3문장)
+- kind:"fact"|"conflict"|"impact"|"future"|"etc"
+3) 3~7개
+`.trim();
+
+      const tpCompletion = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          { role: "system", content: "반드시 JSON 배열만 출력한다." },
+          { role: "user", content: tpPrompt },
+        ],
+        temperature: 0.4,
+      });
+
+      const tpRaw = tpCompletion.choices?.[0]?.message?.content ?? "[]";
+
+      let talkingPoints: any[] = [];
+      try {
+        const tmp = JSON.parse(tpRaw);
+        if (Array.isArray(tmp)) talkingPoints = tmp;
+      } catch {}
+
+      // 최소 정리
+      const cleanedTalkingPoints = talkingPoints
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
+        .slice(0, 7)
+        .map((p, idx) => ({
+          order: typeof p.order === "number" ? p.order : idx + 1,
+          title: String(p.title).slice(0, 100),
+          body: String(p.body).slice(0, 800),
+          kind:
+            p.kind === "fact" || p.kind === "conflict" || p.kind === "impact" || p.kind === "future"
+              ? p.kind
+              : "etc",
+        }));
+
+      // 3) glossaryText (generateGlossaryText 재사용)
+      const itemsText = rawClips
+        .map((r) => `- [${r.channel ?? "채널"}] ${r.title ?? "(제목 없음)"}`)
+        .join("\n");
+
+      const glossaryText = await generateGlossaryText({
+        title,
+        summary: aiSummary || baseDesc || null,
+        itemsText,
+        locale: "ko",
+        sourceType: "clip",
+      });
+
+      return res.json(
+        decodeObject({
+          ok: true,
+          aiSummary: aiSummary || null,
+          talkingPoints: cleanedTalkingPoints,
+          glossaryText: glossaryText || null,
+        } as any)
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
