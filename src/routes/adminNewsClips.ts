@@ -1031,4 +1031,82 @@ router.post(
 );
 
 
+${baseDesc || ""}
+
+[AI 요약]
+${aiSummary || ""}
+
+[포함된 클립 목록]
+${clipLines}
+
+규칙:
+1) JSON 배열만 출력
+2) 각 항목 필드:
+- order:number (1부터)
+- title:string (짧게)
+- body:string (2~3문장)
+- kind:"fact"|"conflict"|"impact"|"future"|"etc"
+3) 3~7개
+`.trim();
+
+      const tpCompletion = await openai.chat.completions.create({
+        model: "gpt-4.1-mini",
+        messages: [
+          { role: "system", content: "반드시 JSON 배열만 출력한다." },
+          { role: "user", content: tpPrompt },
+        ],
+        temperature: 0.4,
+      });
+
+      const tpRaw = tpCompletion.choices?.[0]?.message?.content ?? "[]";
+
+      let talkingPoints: any[] = [];
+      try {
+        const tmp = JSON.parse(tpRaw);
+        if (Array.isArray(tmp)) talkingPoints = tmp;
+      } catch {}
+
+      // 최소 정리
+      const cleanedTalkingPoints = talkingPoints
+        .filter((p) => p && typeof p.title === "string" && typeof p.body === "string")
+        .slice(0, 7)
+        .map((p, idx) => ({
+          order: typeof p.order === "number" ? p.order : idx + 1,
+          title: String(p.title).slice(0, 100),
+          body: String(p.body).slice(0, 800),
+          kind:
+            p.kind === "fact" || p.kind === "conflict" || p.kind === "impact" || p.kind === "future"
+              ? p.kind
+              : "etc",
+        }));
+
+      // 3) glossaryText (generateGlossaryText 재사용)
+      const itemsText = rawClips
+        .map((r) => `- [${r.channel ?? "채널"}] ${r.title ?? "(제목 없음)"}`)
+        .join("\n");
+
+      const glossaryText = await generateGlossaryText({
+        title,
+        summary: aiSummary || baseDesc || null,
+        itemsText,
+        locale: "ko",
+        sourceType: "clip",
+      });
+
+      return res.json(
+        decodeObject({
+          ok: true,
+          aiSummary: aiSummary || null,
+          talkingPoints: cleanedTalkingPoints,
+          glossaryText: glossaryText || null,
+        } as any)
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+
+
 export default router;
