@@ -65,8 +65,6 @@ ${titles}
 
 /* -------------------------------------------------------
  * 2) 중립 AI Summary 생성 → ClipIssue.aiSummary 저장
- *  - 생성: 제목/채널/성향(메타)만 사용
- *  - 검증: 원본(description 등)을 이용해 큰 오류만 체크
  * ----------------------------------------------------- */
 export async function generateClipIssueSummary(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
@@ -81,7 +79,6 @@ export async function generateClipIssueSummary(clipIssueId: string) {
 
   if (!issue) throw new Error("CLIP_ISSUE_NOT_FOUND");
 
-  // 2-1) 메타 정보 기반 요약 생성
   const clipLines = issue.clips
     .map((c, i) => {
       const r = c.rawClip;
@@ -144,7 +141,6 @@ ${clippedList}
 
   let summary = res.choices?.[0]?.message?.content?.trim() ?? "";
 
-  // 2-2) 원본 데이터(설명 등)로 요약 검증 (선택적)
   const descriptionBlock = take(issue.description, 2000);
 
   if (descriptionBlock && summary) {
@@ -200,18 +196,16 @@ ${descriptionBlock}
 
   await prisma.clipIssue.update({
     where: { id: clipIssueId },
-    data: {
-      aiSummary: summary,
-    },
+    data: { aiSummary: summary },
   });
 
   return summary;
 }
 
 /* -------------------------------------------------------
- * 3) 쟁점 리스트 생성 → ClipIssue.talkingPoints 저장
- *  - 요약 + 메타를 바탕으로, 시청 전에 보면 좋은 쟁점/질문 리스트
- *  - 원본 내용 “대신 읽어주는 것”이 아니라, “볼 때 뭘 볼지”를 정리
+ * 3) 쟁점 리스트 생성 (⚠️ DB 저장 금지)
+ *  - ClipIssue.talkingPoints는 relation 테이블이므로
+ *    여기서는 문자열 생성만 반환한다.
  * ----------------------------------------------------- */
 export async function generateClipIssueTalkingPoints(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
@@ -280,39 +274,23 @@ ${clipLines}
     ],
   });
 
-  const talkingPoints = res.choices?.[0]?.message?.content?.trim() ?? "";
-
-  if (!talkingPoints) return "";
-
-  await prisma.clipIssue.update({
-    where: { id: clipIssueId },
-    data: {
-      // @ts-ignore: ClipIssue 모델에 talkingPoints 필드 있다고 가정
-      talkingPoints,
-    },
-  });
-
-  return talkingPoints;
+  // ✅ 여기서는 “생성만” 하고 저장하지 않는다.
+  return res.choices?.[0]?.message?.content?.trim() ?? "";
 }
 
 /* -------------------------------------------------------
- * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText + talkingPoints)
- *    (좌/우 프레임 요약은 제거)
+ * 4) ClipIssue 전체 AI 필드 재생성 (+ glossaryText)
+ *    - talkingPoints는 relation이므로 여기서 저장하지 않는다.
  * ----------------------------------------------------- */
 export async function refreshClipIssueAIFields(clipIssueId: string) {
-  // 제목 / 요약 병렬 생성
   const [title, aiSummary] = await Promise.all([
     generateClipIssueTitle(clipIssueId),
     generateClipIssueSummary(clipIssueId),
   ]);
 
-  // 1차 업데이트: 기본 AI 필드 + 클립 목록 로드
   const updatedBase = await prisma.clipIssue.update({
     where: { id: clipIssueId },
-    data: {
-      title,
-      aiSummary,
-    },
+    data: { title, aiSummary },
     include: {
       clips: {
         include: { rawClip: true },
@@ -321,10 +299,6 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     },
   });
 
-  // 쟁점 리스트 생성 (aiSummary를 활용)
-  const talkingPoints = await generateClipIssueTalkingPoints(clipIssueId);
-
-  // glossary용 클립 목록 텍스트 구성
   const clipsText = updatedBase.clips
     .map((ic) => {
       const ch = ic.rawClip?.channel ?? "채널";
@@ -341,29 +315,24 @@ export async function refreshClipIssueAIFields(clipIssueId: string) {
     sourceType: "clip",
   });
 
-  // glossaryText / talkingPoints 반영
+  // ✅ glossaryText는 ClipIssue의 string 필드이므로 저장 OK
   const final = await prisma.clipIssue.update({
     where: { id: clipIssueId },
-    data: {
-      // @ts-ignore
-      glossaryText,
-      // @ts-ignore
-      talkingPoints: talkingPoints || null,
-    },
+    data: { glossaryText },
   });
+
+  // (선택) 관리자에서 필요하면 생성만 해서 같이 반환 가능
+  // const talkingPoints = await generateClipIssueTalkingPoints(clipIssueId);
 
   return {
     ...final,
-    // @ts-ignore
     glossaryText,
-    // @ts-ignore
-    talkingPoints,
+    // talkingPoints, // 저장 X, 필요하면 위 주석 풀고 반환만
   } as any;
 }
 
 /* -------------------------------------------------------
  * 5) 클립 이슈 용어 사전만 재생성
- *  - generateGlossaryText 재사용
  * ----------------------------------------------------- */
 export async function refreshClipIssueGlossary(clipIssueId: string) {
   const issue = await prisma.clipIssue.findUnique({
@@ -376,11 +345,8 @@ export async function refreshClipIssueGlossary(clipIssueId: string) {
     },
   });
 
-  if (!issue) {
-    return null;
-  }
+  if (!issue) return null;
 
-  // LLM이 참고할 클립 목록 텍스트
   const clipsText = (issue.clips ?? [])
     .map((ic) => {
       const ch = ic.rawClip?.channel ?? "채널";
@@ -397,16 +363,9 @@ export async function refreshClipIssueGlossary(clipIssueId: string) {
     sourceType: "clip",
   });
 
-  const updated = await prisma.clipIssue.update({
+  return await prisma.clipIssue.update({
     where: { id: clipIssueId },
-    data: {
-      glossaryText,
-    },
-    select: {
-      id: true,
-      glossaryText: true,
-    },
+    data: { glossaryText },
+    select: { id: true, glossaryText: true },
   });
-
-  return updated;
 }
