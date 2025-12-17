@@ -258,91 +258,56 @@ async function computeTopKeywords(params: {
 }) {
   const limit = Math.min(Math.max(params.limit ?? 30, 5), 100);
 
-  // ✅ 언론 이슈 키워드
-  // - status != SUGGESTED
-  // - createdAt 기준 (대시보드 “등록 추이”와 일관)
-  const issues = await prisma.issue.findMany({
+  // ✅ 1) 수집된 기사(원천) 제목 키워드
+  // - "수집" 기준이면 보통 createdAt
+  // - 발행일 기준으로 하고 싶으면 createdAt → publishedAt 으로 변경
+  const articles = await prisma.article.findMany({
     where: {
-      status: { not: "SUGGESTED" as any },
       createdAt: { gte: params.from, lte: params.to },
     },
-    select: {
-      title: true,
-      summary: true,
-      body: true,
-      sources: { select: { title: true, outlet: true } },
-    },
-    take: 5000, // ✅ 안전장치 (폭주 방지)
+    select: { title: true },
+    take: 20000,
     orderBy: { createdAt: "desc" },
   });
 
-  const issueCounter = new Map<string, number>();
-  for (const it of issues) {
-    const buf: string[] = [];
-    if (it.title) buf.push(it.title);
-    if (it.summary) buf.push(it.summary);
-    if (it.body) buf.push(it.body);
-    for (const s of it.sources ?? []) {
-      if (s.title) buf.push(s.title);
-      // outlet까지 토큰에 넣고 싶으면 아래 주석 해제
-      // if (s.outlet) buf.push(s.outlet);
-    }
-    const tokens = tokenize(buf.join(" "));
-    for (const t of tokens) issueCounter.set(t, (issueCounter.get(t) ?? 0) + 1);
+  const articleCounter = new Map<string, number>();
+  for (const a of articles) {
+    if (!a.title) continue;
+    const tokens = tokenize(a.title);
+    for (const t of tokens) articleCounter.set(t, (articleCounter.get(t) ?? 0) + 1);
   }
 
-  // ✅ 클립 이슈 키워드
-  // - ClipIssue.createdAt 기준
-  // - ClipIssue + 연결 RawClip(title/description/text)까지 포함
-  const clipIssues = await prisma.clipIssue.findMany({
-    where: { createdAt: { gte: params.from, lte: params.to } },
-    select: {
-      title: true,
-      description: true,
-      aiSummary: true,
-      clips: {
-        select: {
-          rawClip: { select: { title: true, description: true, text: true, channel: true } },
-        },
-      },
+  // ✅ 2) 수집된 클립(원천) 제목 키워드
+  const rawClips = await prisma.rawClip.findMany({
+    where: {
+      createdAt: { gte: params.from, lte: params.to },
     },
-    take: 3000,
+    select: { title: true },
+    take: 20000,
     orderBy: { createdAt: "desc" },
   });
 
   const clipCounter = new Map<string, number>();
-  for (const ci of clipIssues) {
-    const buf: string[] = [];
-    if (ci.title) buf.push(ci.title);
-    if (ci.description) buf.push(ci.description);
-    if (ci.aiSummary) buf.push(ci.aiSummary);
-
-    for (const link of ci.clips ?? []) {
-      const rc = link.rawClip;
-      if (!rc) continue;
-      if (rc.title) buf.push(rc.title);
-      if (rc.description) buf.push(rc.description);
-      if (rc.text) buf.push(rc.text);
-      // channel까지 포함하고 싶으면 아래 주석 해제
-      // if (rc.channel) buf.push(rc.channel);
-    }
-
-    const tokens = tokenize(buf.join(" "));
+  for (const c of rawClips) {
+    if (!c.title) continue;
+    const tokens = tokenize(c.title);
     for (const t of tokens) clipCounter.set(t, (clipCounter.get(t) ?? 0) + 1);
   }
 
+  // ✅ 응답 키는 프론트 호환 위해 유지(원하면 articles/rawClips로 rename 가능)
   return {
-    issues: topNFromCounter(issueCounter, limit),
-    clipIssues: topNFromCounter(clipCounter, limit),
+    issues: topNFromCounter(articleCounter, limit),      // 이제 "기사 키워드 TOP"
+    clipIssues: topNFromCounter(clipCounter, limit),    // 이제 "클립 키워드 TOP"
     meta: {
       from: params.from.toISOString(),
       to: params.to.toISOString(),
-      issueDocs: issues.length,
-      clipIssueDocs: clipIssues.length,
+      issueDocs: articles.length,       // 기사 개수
+      clipIssueDocs: rawClips.length,   // 클립 개수
       limit,
     },
   };
 }
+
 
 /**
  * GET /api/admin/metrics?period=7|30|...
