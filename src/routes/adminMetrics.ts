@@ -31,7 +31,7 @@ function lastNDates(n: number) {
   for (let i = n - 1; i >= 0; i--) {
     const d = new Date(today);
     d.setDate(d.getDate() - i);
-    out.push(dayKeyKST(d)); // ✅ KST 기준으로 통일
+    out.push(dayKeyKST(d)); // ✅ KST 기준 dayKey
   }
   return out;
 }
@@ -51,21 +51,35 @@ function union<T>(...sets: Set<T>[]) {
 
 type DailyTable = "Issue" | "Agenda" | "IssueComment" | "AgendaComment";
 
+type DailyCountOpts = {
+  /** ✅ 등록된 이슈만 집계: Issue.status != 'SUGGESTED' */
+  issueRegisteredOnly?: boolean;
+};
+
 /**
  * ✅ Postgres: createdAt을 KST(+9h)로 날짜화해서 일별 집계
- * - SQLite의 date() / ? 바인딩 금지
- * - Postgres는 $1 바인딩 사용
+ * - since는 DateTime 비교 (UTC 기준으로 DB에 저장되어 있을 것)
+ * - 출력 키(d)는 'YYYY-MM-DD' (KST 기준)
  */
-async function dailyCountPostgres(table: DailyTable, since: Date) {
+async function dailyCountPostgres(
+  table: DailyTable,
+  since: Date,
+  opts?: DailyCountOpts
+) {
   const t = `"${table}"`;
   const sinceDate = startOfDay(since);
+
+  const extraWhere =
+    table === "Issue" && opts?.issueRegisteredOnly
+      ? ` AND "status" <> 'SUGGESTED'`
+      : ``;
 
   const rows = await prisma.$queryRawUnsafe<Array<{ d: string; c: number }>>(
     `
     SELECT to_char((("createdAt" + interval '9 hours')::date), 'YYYY-MM-DD') AS d,
            COUNT(*)::int AS c
     FROM ${t}
-    WHERE "createdAt" >= $1
+    WHERE "createdAt" >= $1${extraWhere}
     GROUP BY 1
     ORDER BY 1 ASC
     `,
@@ -78,18 +92,43 @@ async function dailyCountPostgres(table: DailyTable, since: Date) {
 }
 
 /**
- * ✅ PageView는 이미 dayKey가 KST YYYY-MM-DD라 그대로 사용
- * - parentType은 enum(ParentType) 이지만, 비교는 텍스트 파라미터로도 OK (보통 암묵 캐스팅 됨)
- *   만약 여기서 타입 에러가 나면 WHERE 절에 ::text 캐스팅 넣으면 됨 (아래 주석 참고)
+ * ✅ PageView dayKey는 이미 KST YYYY-MM-DD
+ * - issue 조회수는 "등록된 이슈"만 집계하려면 Issue join + status 필터 필요
+ * - parentType(enum) 비교 문제 방지: ::text 캐스팅
  */
-async function dailyViewsMap(parentType: "issue" | "agenda", since: Date) {
-  const t = `"PageView"`;
+async function dailyViewsMapRegisteredOnly(
+  parentType: "issue" | "agenda",
+  since: Date
+) {
   const sinceKey = dayKeyKST(startOfDay(since));
 
+  // issue: 등록된 이슈만 (status != SUGGESTED)
+  if (parentType === "issue") {
+    const rows = await prisma.$queryRawUnsafe<Array<{ d: string; c: number }>>(
+      `
+      SELECT pv."dayKey" AS d, COUNT(*)::int AS c
+      FROM "PageView" pv
+      JOIN "Issue" i ON i.id = pv."parentId"
+      WHERE (pv."parentType"::text) = $1
+        AND pv."dayKey" >= $2
+        AND i."status" <> 'SUGGESTED'
+      GROUP BY pv."dayKey"
+      ORDER BY d ASC
+      `,
+      parentType,
+      sinceKey
+    );
+
+    const map = new Map<string, number>();
+    rows.forEach((r) => map.set(r.d, Number(r.c)));
+    return map;
+  }
+
+  // agenda: 그대로
   const rows = await prisma.$queryRawUnsafe<Array<{ d: string; c: number }>>(
     `
     SELECT "dayKey" AS d, COUNT(*)::int AS c
-    FROM ${t}
+    FROM "PageView"
     WHERE ("parentType"::text) = $1 AND "dayKey" >= $2
     GROUP BY "dayKey"
     ORDER BY d ASC
@@ -103,7 +142,23 @@ async function dailyViewsMap(parentType: "issue" | "agenda", since: Date) {
   return map;
 }
 
-
+/**
+ * ✅ 오늘 issue 조회수(등록된 이슈만)
+ */
+async function issueViewsTodayRegisteredOnly(todayKey: string) {
+  const rows = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+    `
+    SELECT COUNT(*)::int AS c
+    FROM "PageView" pv
+    JOIN "Issue" i ON i.id = pv."parentId"
+    WHERE (pv."parentType"::text) = 'issue'
+      AND pv."dayKey" = $1
+      AND i."status" <> 'SUGGESTED'
+    `,
+    todayKey
+  );
+  return Number(rows?.[0]?.c ?? 0);
+}
 
 /**
  * GET /api/admin/metrics?period=7|30|...
@@ -116,7 +171,10 @@ router.get(
     try {
       const rawPeriod = Number(req.query.period ?? 30);
       const period = Math.min(
-        Math.max(Number.isFinite(rawPeriod) && rawPeriod > 0 ? rawPeriod : 30, 1),
+        Math.max(
+          Number.isFinite(rawPeriod) && rawPeriod > 0 ? rawPeriod : 30,
+          1
+        ),
         90
       );
 
@@ -124,6 +182,9 @@ router.get(
       const last1d = daysAgo(1);
       const last7d = daysAgo(7);
       const last30d = daysAgo(30);
+
+      // ✅ "등록된 이슈" 기준: status != SUGGESTED
+      const issueRegisteredWhere = { status: { not: "SUGGESTED" as any } };
 
       /* ── 총계 / 금일 ───────────────────────────────── */
       const [
@@ -136,12 +197,20 @@ router.get(
         issueCommentsToday,
         agendaCommentsToday,
       ] = await Promise.all([
-        safe(() => prisma.issue.count(), 0),
+        // ✅ 등록된 이슈만
+        safe(() => prisma.issue.count({ where: issueRegisteredWhere }), 0),
         safe(() => prisma.agenda.count(), 0),
         safe(() => prisma.issueComment.count(), 0),
         safe(() => prisma.agendaComment.count(), 0),
 
-        safe(() => prisma.issue.count({ where: { createdAt: { gte: todayStart } } }), 0),
+        // ✅ 등록된 이슈 + 오늘
+        safe(
+          () =>
+            prisma.issue.count({
+              where: { ...issueRegisteredWhere, createdAt: { gte: todayStart } },
+            }),
+          0
+        ),
         safe(() => prisma.agenda.count({ where: { createdAt: { gte: todayStart } } }), 0),
         safe(() => prisma.issueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
         safe(() => prisma.agendaComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
@@ -205,32 +274,56 @@ router.get(
         let e = 0, s = 0, p = 0, n = 0;
         for (const u of usersWithCTI) {
           const sc = u.ctiScores as any;
-          if (sc && typeof sc === "object" && typeof sc.E === "number" && typeof sc.S === "number" && typeof sc.P === "number") {
-            e += sc.E; s += sc.S; p += sc.P; n++;
+          if (
+            sc &&
+            typeof sc === "object" &&
+            typeof sc.E === "number" &&
+            typeof sc.S === "number" &&
+            typeof sc.P === "number"
+          ) {
+            e += sc.E;
+            s += sc.S;
+            p += sc.P;
+            n++;
           }
           const t = u.ctiType ?? "UNKNOWN";
           typeDist[t] = (typeDist[t] ?? 0) + 1;
         }
-        if (n > 0) avgScores = { E: +(e / n).toFixed(2), S: +(s / n).toFixed(2), P: +(p / n).toFixed(2) };
+        if (n > 0)
+          avgScores = {
+            E: +(e / n).toFixed(2),
+            S: +(s / n).toFixed(2),
+            P: +(p / n).toFixed(2),
+          };
       }
 
       /* ── 일일 추이(최근 N일) ────────────────────── */
       const days = lastNDates(period);
       const since = daysAgo(period - 1);
 
-      const [mIssue, mAgenda, mIssueC, mAgendaC, mIssueV, mAgendaV] = await Promise.all([
-        dailyCountPostgres("Issue", since),
-        dailyCountPostgres("Agenda", since),
-        dailyCountPostgres("IssueComment", since),
-        dailyCountPostgres("AgendaComment", since),
-        dailyViewsMap("issue", since),
-        dailyViewsMap("agenda", since),
-      ]);
+      const [mIssue, mAgenda, mIssueC, mAgendaC, mIssueV, mAgendaV] =
+        await Promise.all([
+          // ✅ 등록된 이슈만
+          dailyCountPostgres("Issue", since, { issueRegisteredOnly: true }),
+          dailyCountPostgres("Agenda", since),
+          dailyCountPostgres("IssueComment", since),
+          dailyCountPostgres("AgendaComment", since),
+          // ✅ 등록된 이슈 조회수만
+          dailyViewsMapRegisteredOnly("issue", since),
+          dailyViewsMapRegisteredOnly("agenda", since),
+        ]);
 
       const todayKey = dayKeyKST();
+
       const [issuesViewsToday, agendasViewsToday] = await Promise.all([
-        safe(() => prisma.pageView.count({ where: { parentType: "issue", dayKey: todayKey } }), 0),
-        safe(() => prisma.pageView.count({ where: { parentType: "agenda", dayKey: todayKey } }), 0),
+        safe(() => issueViewsTodayRegisteredOnly(todayKey), 0),
+        safe(
+          () =>
+            prisma.pageView.count({
+              where: { parentType: "agenda", dayKey: todayKey },
+            }),
+          0
+        ),
       ]);
 
       const timeseries = {
@@ -250,9 +343,9 @@ router.get(
         ok: true,
         data: {
           issues: {
-            total: issuesTotal,
-            today: issuesToday,
-            viewsToday: issuesViewsToday,
+            total: issuesTotal, // ✅ 등록된 이슈 총계
+            today: issuesToday, // ✅ 등록된 이슈 오늘 생성
+            viewsToday: issuesViewsToday, // ✅ 등록된 이슈 오늘 조회
             commentsTotal: issueCommentsTotal,
             commentsToday: issueCommentsToday,
           },
@@ -273,7 +366,6 @@ router.get(
         },
       });
     } catch (err) {
-      // ✅ 여기서 Azure 로그에 에러가 "확실히" 찍히고, 응답도 JSON으로 떨어짐
       console.error("[admin/metrics] ERROR:", err);
       return res.status(500).json({
         ok: false,
