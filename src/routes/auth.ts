@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import { PrismaClient, type Prisma } from "@prisma/client";
 import crypto, { randomBytes } from "crypto";
 import { OAuth2Client } from "google-auth-library";
- 
+
 const router = Router();
 const prisma = new PrismaClient();
 
@@ -16,6 +16,21 @@ const REFRESH_DAYS = parseInt(process.env.REFRESH_TOKEN_DAYS ?? "30", 10);
 const CLIENT_URL = process.env.CLIENT_URL!; // 예: https://whattosee.now
 const EMAIL_AUTH_ENABLED =
   (process.env.AUTH_EMAIL_ENABLED ?? "false") === "true";
+
+/* ─────────────────────────────────────────────
+   ✅ HTTPS 판별 (프록시/로드밸런서 환경 대응)
+   - 배포 환경에서 NODE_ENV가 production이 아니어도 안전하게 동작
+───────────────────────────────────────────── */
+function isHttpsReq(req?: any) {
+  const forced = process.env.FORCE_HTTPS === "true";
+  const xfProto = (req?.headers?.["x-forwarded-proto"] as string | undefined)?.split(",")[0]?.trim();
+  return (
+    forced ||
+    req?.secure === true ||
+    xfProto === "https" ||
+    process.env.NODE_ENV === "production"
+  );
+}
 
 /** JWT ===== */
 function signAccessToken(user: { id: string; email: string | null }) {
@@ -30,12 +45,18 @@ function newRefreshRaw() {
   return crypto.randomBytes(64).toString("hex");
 }
 
-function cookieOptions() {
-  const isProd = process.env.NODE_ENV === "production";
+/* ─────────────────────────────────────────────
+   ✅ Refresh Cookie 옵션
+   - cross-site(whattosee.now -> api.whattosee.now)에서 쿠키가 붙으려면:
+     SameSite=None + Secure(HTTPS) 가 사실상 필수
+───────────────────────────────────────────── */
+function refreshCookieOptions(req?: any) {
+  const https = isHttpsReq(req);
+
   return {
     httpOnly: true,
-    sameSite: isProd ? ("none" as const) : ("lax" as const),
-    secure: isProd,
+    sameSite: (https ? ("none" as const) : ("lax" as const)),
+    secure: https,
     path: "/",
     maxAge: REFRESH_DAYS * 24 * 60 * 60 * 1000,
   };
@@ -43,19 +64,22 @@ function cookieOptions() {
 
 /* ──────────────────────────────
    공통: OAuth 상태/앱 리다이렉트 쿠키
+   - 이 쿠키들은 "api.whattosee.now" 안에서만 왕복(google -> callback)하므로
+     SameSite=Lax로 충분하고, HTTPS면 Secure로 맞추기
 ────────────────────────────── */
 const OAUTH_STATE_COOKIE = "oauth_state";
-const stateCookieOpts = {
-  httpOnly: true,
-  sameSite: "lax" as const,
-  secure: false,
-  path: "/",
-  maxAge: 5 * 60 * 1000,
-};
-
-// 🔹 앱에서 넘기는 딥링크 redirect_uri (예: exp://... / whattoseeapp://oauth-callback)
 const APP_REDIRECT_COOKIE = "app_redirect";
-const appRedirectCookieOpts = stateCookieOpts;
+
+function transientCookieOptions(req?: any) {
+  const https = isHttpsReq(req);
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: https,
+    path: "/",
+    maxAge: 5 * 60 * 1000,
+  };
+}
 
 /* ──────────────────────────────
    Google OAuth
@@ -86,10 +110,10 @@ router.get("/google", (req, res) => {
   // 앱에서 온 요청이면, 앱 딥링크 redirect_uri를 쿠키에 저장
   if (platform === "app" && redirect_uri) {
     console.log("[AUTH /google] set APP_REDIRECT_COOKIE:", redirect_uri);
-    res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
+    res.cookie(APP_REDIRECT_COOKIE, redirect_uri, transientCookieOptions(req));
   }
 
-  // CSRF 방지 & 디버깅용 state (필요시 사용)
+  // CSRF 방지 & 디버깅용 state
   const statePayload = JSON.stringify({
     platform: platform ?? "web",
     redirect_uri: redirect_uri ?? null,
@@ -122,12 +146,6 @@ async function getGoogleUserProfile(
     audience: process.env.GOOGLE_CLIENT_ID!,
   });
   const p = ticket.getPayload();
-  console.log("[AUTH getGoogleUserProfile] payload:", {
-    email: p?.email,
-    name: p?.name,
-    given_name: p?.given_name,
-    family_name: p?.family_name,
-  });
 
   if (!p?.email) throw new Error("No email in Google ID token");
   return { email: p.email, name: p.name ?? p.given_name ?? p.family_name };
@@ -185,6 +203,7 @@ router.post("/login", async (req, res) => {
     id: user.id,
     email: user.email ?? null,
   });
+
   const raw = newRefreshRaw();
   const tokenHash = crypto.createHash("sha256").update(raw).digest("hex");
   await prisma.refreshToken.create({
@@ -195,7 +214,7 @@ router.post("/login", async (req, res) => {
     },
   });
 
-  return res.cookie(REFRESH_COOKIE, raw, cookieOptions()).json({
+  return res.cookie(REFRESH_COOKIE, raw, refreshCookieOptions(req)).json({
     accessToken,
     user: {
       id: user.id,
@@ -209,6 +228,7 @@ router.post("/login", async (req, res) => {
 /* 토큰 재발급/로그아웃/ME ==================== */
 router.post("/refresh", async (req, res) => {
   noStore(res);
+
   const raw = req.cookies?.[REFRESH_COOKIE];
   if (!raw) return res.status(401).json({ error: "No refresh token" });
 
@@ -217,6 +237,7 @@ router.post("/refresh", async (req, res) => {
     where: { tokenHash, revokedAt: null, expiresAt: { gt: new Date() } },
     include: { user: true },
   });
+
   if (!record?.user)
     return res.status(401).json({ error: "Invalid refresh token" });
 
@@ -224,6 +245,10 @@ router.post("/refresh", async (req, res) => {
     id: record.user.id,
     email: record.user.email ?? null,
   });
+
+  // ✅ 슬라이딩(체감 로그아웃 방지) - 쿠키를 다시 set
+  res.cookie(REFRESH_COOKIE, raw, refreshCookieOptions(req));
+
   return res.json({
     accessToken,
     user: {
@@ -237,6 +262,7 @@ router.post("/refresh", async (req, res) => {
 
 router.post("/logout", async (req, res) => {
   noStore(res);
+
   const raw = req.cookies?.[REFRESH_COOKIE];
   if (raw) {
     const tokenHash = crypto.createHash("sha256").update(raw).digest("hex");
@@ -245,7 +271,11 @@ router.post("/logout", async (req, res) => {
       data: { revokedAt: new Date() },
     });
   }
-  return res.clearCookie(REFRESH_COOKIE, cookieOptions()).json({ ok: true });
+
+  // ✅ clearCookie 옵션이 setCookie와 정확히 같아야 실제로 지워짐
+  return res
+    .clearCookie(REFRESH_COOKIE, refreshCookieOptions(req))
+    .json({ ok: true });
 });
 
 router.get("/me", async (req, res) => {
@@ -269,15 +299,11 @@ router.get("/me", async (req, res) => {
         nickname: true,
         createdAt: true,
         role: true,
-        // 🔹 온보딩/동의 관련
         tosAgreedAt: true,
         privacyAgreedAt: true,
         marketingAgreed: true,
-        // 🔹 CTI 관련
         ctiType: true,
         ctiScores: true,
-        // (선택) 온보딩 완료 시각 필드를 만들었다면
-        // onboardedAt: true,
       },
     });
     if (!user) return res.status(401).json({ error: "Unauthorized" });
@@ -296,7 +322,6 @@ router.get("/me", async (req, res) => {
         ...user,
         isAdmin,
         role: user.role,
-        // 🔹 프론트 타입 이름과 맞춰주고 싶으면 여기서 키 바꿔서 내려줄 수도 있음
         marketingOptIn: user.marketingAgreed ?? false,
       },
     });
@@ -305,37 +330,22 @@ router.get("/me", async (req, res) => {
   }
 });
 
-
 /* Google 콜백 ==================== */
 router.get("/google/callback", async (req, res) => {
   try {
     console.log("[AUTH /google/callback] query:", req.query);
-    console.log("[AUTH /google/callback] cookies:", req.cookies);
 
     const code = req.query.code as string;
-    if (!code) {
-      console.warn(
-        "[AUTH /google/callback] missing code, redirect to CLIENT_URL"
-      );
-      return res.redirect(CLIENT_URL);
-    }
+    if (!code) return res.redirect(CLIENT_URL);
 
-    // 🔹 앱 redirect_uri 쿠키 읽기
-    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as
-      | string
-      | undefined;
-    console.log("[AUTH /google/callback] appRedirect from cookie:", appRedirect);
-
+    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
     if (appRedirect) {
-      res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
+      res.clearCookie(APP_REDIRECT_COOKIE, transientCookieOptions(req));
     }
 
     const { email, name } = await getGoogleUserProfile(code);
-    console.log("[AUTH /google/callback] google profile:", { email, name });
 
-    // 기존 유저 조회 (username/nickname 절대 덮어쓰지 않기)
     const existing = await prisma.user.findUnique({ where: { email } });
-    console.log("[AUTH /google/callback] existing user:", !!existing);
 
     let user;
     if (existing) {
@@ -349,7 +359,6 @@ router.get("/google/callback", async (req, res) => {
           googleId: email,
         },
       });
-      console.log("[AUTH /google/callback] created user:", user.id);
     }
 
     const accessToken = signAccessToken({
@@ -366,34 +375,28 @@ router.get("/google/callback", async (req, res) => {
         expiresAt: new Date(Date.now() + REFRESH_DAYS * 86400 * 1000),
       },
     });
-    res.cookie(REFRESH_COOKIE, raw, cookieOptions());
+
+    // ✅ refresh 쿠키는 cross-site 고려해서 확실하게 세팅
+    res.cookie(REFRESH_COOKIE, raw, refreshCookieOptions(req));
 
     const nextParam = (req.query.next as string | undefined) ?? "/";
 
-    // 🔹 앱 요청이면: 앱 딥링크로 토큰 전달
+    // 앱이면 앱 딥링크로
     if (appRedirect) {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
       const redirectUrl = existing
-        ? `${base}${sep}token=${encodeURIComponent(
-            accessToken
-          )}&next=${encodeURIComponent(nextParam)}`
+        ? `${base}${sep}token=${encodeURIComponent(accessToken)}&next=${encodeURIComponent(nextParam)}`
         : `${base}${sep}token=${encodeURIComponent(accessToken)}&new=1`;
 
-      console.log("[AUTH /google/callback] redirect to app:", redirectUrl);
       return res.redirect(redirectUrl);
     }
 
-    // 🔹 웹 요청이면 기존 CLIENT_URL
+    // 웹이면 CLIENT_URL로
     const redirectUrl = existing
-      ? `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(
-          accessToken
-        )}&next=${encodeURIComponent(nextParam)}`
-      : `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(
-          accessToken
-        )}&new=1`;
+      ? `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessToken)}&next=${encodeURIComponent(nextParam)}`
+      : `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessToken)}&new=1`;
 
-    console.log("[AUTH /google/callback] redirect to web:", redirectUrl);
     return res.redirect(redirectUrl);
   } catch (err) {
     console.error("Google OAuth error:", err);
@@ -409,12 +412,10 @@ router.get("/kakao", (req, res) => {
   };
 
   const state = randomBytes(16).toString("hex");
-  res.cookie(OAUTH_STATE_COOKIE, state, stateCookieOpts);
+  res.cookie(OAUTH_STATE_COOKIE, state, transientCookieOptions(req));
 
-  // 앱에서 온 요청이면 앱 redirect_uri 저장
   if (platform === "app" && redirect_uri) {
-    console.log("[KAKAO /kakao] app flow, save APP_REDIRECT_COOKIE:", redirect_uri);
-    res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
+    res.cookie(APP_REDIRECT_COOKIE, redirect_uri, transientCookieOptions(req));
   }
 
   const redirectUri = process.env.KAKAO_REDIRECT_URI!;
@@ -427,56 +428,27 @@ router.get("/kakao", (req, res) => {
       state,
     }).toString();
 
-  console.log("[KAKAO /kakao] redirect_uri =", redirectUri);
-  console.log("[KAKAO /kakao] AUTH URL =", authUrl);
-
   return res.redirect(authUrl);
 });
 
 router.get("/kakao/callback", async (req, res) => {
   try {
-    console.log("[KAKAO /callback] query:", req.query);
-    console.log("[KAKAO /callback] cookies:", req.cookies);
-
     const code = req.query.code as string | undefined;
     const state = req.query.state as string | undefined;
     const stateCookie = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
 
-    // 앱 redirect_uri 쿠키 (app flow 여부 판단용)
-    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as
-      | string
-      | undefined;
-
+    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
     const isAppFlow = !!appRedirect;
 
-    // 쿠키는 이제 바로 정리
-    res.clearCookie(OAUTH_STATE_COOKIE, stateCookieOpts);
-    if (appRedirect) {
-      res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
-    }
+    res.clearCookie(OAUTH_STATE_COOKIE, transientCookieOptions(req));
+    if (appRedirect) res.clearCookie(APP_REDIRECT_COOKIE, transientCookieOptions(req));
 
-    if (!code) {
-      console.warn("[KAKAO /callback] missing code, redirect to CLIENT_URL");
-      return res.redirect(CLIENT_URL);
-    }
+    if (!code) return res.redirect(CLIENT_URL);
 
-    // 🔐 state 검증: 웹은 강하게, 앱은 느슨하게
     if (!state || !stateCookie || state !== stateCookie) {
-      console.warn("[KAKAO /callback] Invalid OAuth state", {
-        stateFromQuery: state,
-        stateFromCookie: stateCookie,
-        isAppFlow,
-      });
-
-      // 👉 웹 로그인일 때만 진짜 에러
-      if (!isAppFlow) {
-        return res.status(400).send("Invalid OAuth state");
-      }
-      // 👉 앱 로그인일 땐 Kakao 쪽 UA / 쿠키 문제로 인해 state가 깨질 수 있어서
-      //     경고만 찍고 계속 진행 (Expo Go에선 잘 되다가 스토어 빌드에서만 깨지는 케이스 방지)
+      if (!isAppFlow) return res.status(400).send("Invalid OAuth state");
     }
 
-    // 1) 토큰 발급
     const tokenRes = await fetch("https://kauth.kakao.com/oauth/token", {
       method: "POST",
       headers: {
@@ -491,63 +463,47 @@ router.get("/kakao/callback", async (req, res) => {
       }),
     });
 
-    if (!tokenRes.ok) {
-      const txt = await tokenRes.text();
-      console.error("[KAKAO /callback] token error:", txt);
-      throw new Error(txt);
-    }
-
+    if (!tokenRes.ok) throw new Error(await tokenRes.text());
     const tokenJson: any = await tokenRes.json();
     const kakaoAccessToken = tokenJson.access_token as string;
 
-    // 2) 사용자 정보 조회
     const meRes = await fetch("https://kapi.kakao.com/v2/user/me", {
       headers: { Authorization: `Bearer ${kakaoAccessToken}` },
     });
-    if (!meRes.ok) {
-      const txt = await meRes.text();
-      console.error("[KAKAO /callback] me error:", txt);
-      throw new Error(txt);
-    }
+    if (!meRes.ok) throw new Error(await meRes.text());
 
     const me = (await meRes.json()) as any;
     const kakaoId = String(me.id);
     const email: string | undefined = me.kakao_account?.email;
     const nickname: string | undefined = me.kakao_account?.profile?.nickname;
 
-    // 3) upsert
     let user;
     if (email) {
       const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing) {
-        user = existing; // 닉네임 덮어쓰기 금지
-      } else {
-        user = await prisma.user.create({
+      user =
+        existing ??
+        (await prisma.user.create({
           data: {
             email,
             kakaoId,
             username: email ?? kakaoId,
             nickname: nickname ?? "사용자",
           },
-        });
-      }
+        }));
     } else {
       const existing = await prisma.user.findUnique({ where: { kakaoId } });
-      if (existing) {
-        user = existing;
-      } else {
-        user = await prisma.user.create({
+      user =
+        existing ??
+        (await prisma.user.create({
           data: {
             kakaoId,
             email: null,
             username: kakaoId,
             nickname: nickname ?? "사용자",
           },
-        });
-      }
+        }));
     }
 
-    // 4) 우리 서비스용 JWT + refresh
     const accessJwt = signAccessToken({
       id: user.id,
       email: user.email ?? null,
@@ -562,39 +518,20 @@ router.get("/kakao/callback", async (req, res) => {
         expiresAt: new Date(Date.now() + REFRESH_DAYS * 86400 * 1000),
       },
     });
-    res.cookie(REFRESH_COOKIE, raw, cookieOptions());
+    res.cookie(REFRESH_COOKIE, raw, refreshCookieOptions(req));
 
-    // 기존 유저 여부(온보딩 분기 등에 사용)
-    const existingUser = email
-      ? await prisma.user.findUnique({ where: { email } })
-      : await prisma.user.findUnique({ where: { kakaoId } });
-
-    // 5) 앱이면 앱 딥링크로, 웹이면 CLIENT_URL로
     if (appRedirect) {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
-      const redirectUrl = existingUser
-        ? `${base}${sep}token=${encodeURIComponent(accessJwt)}`
-        : `${base}${sep}token=${encodeURIComponent(accessJwt)}&new=1`;
-
-      console.log("[KAKAO /callback] redirect to app:", redirectUrl);
-      return res.redirect(redirectUrl);
+      return res.redirect(`${base}${sep}token=${encodeURIComponent(accessJwt)}`);
     }
 
-    const redirectUrl = existingUser
-      ? `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessJwt)}`
-      : `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(
-          accessJwt
-        )}&new=1`;
-
-    console.log("[KAKAO /callback] redirect to web:", redirectUrl);
-    return res.redirect(redirectUrl);
+    return res.redirect(`${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessJwt)}`);
   } catch (err) {
     console.error("Kakao OAuth error:", err);
     return res.status(500).json({ error: "Kakao OAuth failed" });
   }
 });
-
 
 /* Naver ==================== */
 router.get("/naver", (req, res) => {
@@ -604,11 +541,10 @@ router.get("/naver", (req, res) => {
   };
 
   const state = randomBytes(16).toString("hex");
-  res.cookie(OAUTH_STATE_COOKIE, state, stateCookieOpts);
+  res.cookie(OAUTH_STATE_COOKIE, state, transientCookieOptions(req));
 
-  // 앱 요청이면 앱 redirect_uri 저장
   if (platform === "app" && redirect_uri) {
-    res.cookie(APP_REDIRECT_COOKIE, redirect_uri, appRedirectCookieOpts);
+    res.cookie(APP_REDIRECT_COOKIE, redirect_uri, transientCookieOptions(req));
   }
 
   const authUrl =
@@ -619,31 +555,26 @@ router.get("/naver", (req, res) => {
       redirect_uri: process.env.NAVER_REDIRECT_URI!,
       state,
     }).toString();
-  console.log("[NAVER AUTH URL]", authUrl);
+
   return res.redirect(authUrl);
 });
 
 router.get("/naver/callback", async (req, res) => {
   try {
-    const code = req.query.code as string;
-    const state = req.query.state as string;
-    const stateCookie = req.cookies?.[OAUTH_STATE_COOKIE];
-    res.clearCookie(OAUTH_STATE_COOKIE, stateCookieOpts);
+    const code = req.query.code as string | undefined;
+    const state = req.query.state as string | undefined;
+    const stateCookie = req.cookies?.[OAUTH_STATE_COOKIE] as string | undefined;
 
-    // 앱 redirect_uri 쿠키
-    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as
-      | string
-      | undefined;
-    if (appRedirect) {
-      res.clearCookie(APP_REDIRECT_COOKIE, appRedirectCookieOpts);
-    }
+    const appRedirect = req.cookies?.[APP_REDIRECT_COOKIE] as string | undefined;
+
+    res.clearCookie(OAUTH_STATE_COOKIE, transientCookieOptions(req));
+    if (appRedirect) res.clearCookie(APP_REDIRECT_COOKIE, transientCookieOptions(req));
 
     if (!code) return res.redirect(CLIENT_URL);
     if (!state || !stateCookie || state !== stateCookie) {
       return res.status(400).send("Invalid OAuth state");
     }
 
-    // token
     const tokenRes = await fetch(
       "https://nid.naver.com/oauth2.0/token?" +
         new URLSearchParams({
@@ -656,56 +587,53 @@ router.get("/naver/callback", async (req, res) => {
       { method: "GET" }
     );
     if (!tokenRes.ok) throw new Error(await tokenRes.text());
+
     const tokenJson: any = await tokenRes.json();
     const accessToken = tokenJson.access_token as string;
 
-    // me
     const meRes = await fetch("https://openapi.naver.com/v1/nid/me", {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     if (!meRes.ok) throw new Error(await meRes.text());
+
     const me = (await meRes.json()) as { response?: any };
     const profile = me?.response ?? {};
     const naverId = String(profile.id);
     const email: string | undefined = profile.email;
     const nickname: string | undefined = profile.nickname;
 
-    // upsert
     let user;
     if (email) {
       const existing = await prisma.user.findUnique({ where: { email } });
-      if (existing) {
-        user = existing;
-      } else {
-        user = await prisma.user.create({
+      user =
+        existing ??
+        (await prisma.user.create({
           data: {
             email,
             naverId,
             username: email ?? naverId,
             nickname: nickname ?? "사용자",
           },
-        });
-      }
+        }));
     } else {
       const existing = await prisma.user.findUnique({ where: { naverId } });
-      if (existing) {
-        user = existing;
-      } else {
-        user = await prisma.user.create({
+      user =
+        existing ??
+        (await prisma.user.create({
           data: {
             naverId,
             email: null,
             username: naverId,
             nickname: nickname ?? "사용자",
           },
-        });
-      }
+        }));
     }
 
     const accessJwt = signAccessToken({
       id: user.id,
       email: user.email ?? null,
     });
+
     const raw = newRefreshRaw();
     const tokenHash = crypto.createHash("sha256").update(raw).digest("hex");
     await prisma.refreshToken.create({
@@ -715,30 +643,15 @@ router.get("/naver/callback", async (req, res) => {
         expiresAt: new Date(Date.now() + REFRESH_DAYS * 86400 * 1000),
       },
     });
-    res.cookie(REFRESH_COOKIE, raw, cookieOptions());
+    res.cookie(REFRESH_COOKIE, raw, refreshCookieOptions(req));
 
-    const existingUser = email
-      ? await prisma.user.findUnique({ where: { email } })
-      : await prisma.user.findUnique({ where: { naverId } });
-
-    // 앱이면 앱 딥링크로
     if (appRedirect) {
       const base = appRedirect;
       const sep = base.includes("?") ? "&" : "?";
-      const redirectUrl = existingUser
-        ? `${base}${sep}token=${encodeURIComponent(accessJwt)}`
-        : `${base}${sep}token=${encodeURIComponent(accessJwt)}&new=1`;
-      return res.redirect(redirectUrl);
+      return res.redirect(`${base}${sep}token=${encodeURIComponent(accessJwt)}`);
     }
 
-    // 웹이면 기존 CLIENT_URL
-    const redirectUrl = existingUser
-      ? `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessJwt)}`
-      : `${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(
-          accessJwt
-        )}&new=1`;
-
-    return res.redirect(redirectUrl);
+    return res.redirect(`${CLIENT_URL}/oauth/callback?token=${encodeURIComponent(accessJwt)}`);
   } catch (err) {
     console.error("Naver OAuth error:", err);
     return res.status(500).json({ error: "Naver OAuth failed" });
@@ -757,8 +670,7 @@ router.delete("/delete", async (req, res) => {
       token,
       process.env.JWT_ACCESS_SECRET!
     ) as { sub: string };
-    if (!payload?.sub)
-      return res.status(401).json({ error: "Invalid token" });
+    if (!payload?.sub) return res.status(401).json({ error: "Invalid token" });
 
     const user = await prisma.user.findUnique({ where: { id: payload.sub } });
     if (!user) return res.status(404).json({ error: "User not found" });
@@ -778,7 +690,7 @@ router.delete("/delete", async (req, res) => {
       });
     });
 
-    res.clearCookie(REFRESH_COOKIE, cookieOptions());
+    res.clearCookie(REFRESH_COOKIE, refreshCookieOptions(req));
     return res.json({ ok: true, message: "Account deleted and logged out" });
   } catch (err) {
     console.error("Account deletion failed:", err);
