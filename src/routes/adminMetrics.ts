@@ -258,10 +258,10 @@ async function computeTopKeywords(params: {
 }) {
   const limit = Math.min(Math.max(params.limit ?? 30, 5), 100);
 
-  // ✅ 1) 수집된 기사(원천) 제목 키워드
-  // - "수집" 기준이면 보통 createdAt
-  // - 발행일 기준으로 하고 싶으면 createdAt → publishedAt 으로 변경
-  const articles = await prisma.article.findMany({
+  // ✅ 수집 기사(원천) 제목 키워드: RawArticle.title
+  // "수집된" 기준이면 createdAt
+  // "발행된" 기준이면 createdAt -> publishedAt 으로 바꾸면 됨
+  const rawArticles = await prisma.rawArticle.findMany({
     where: {
       createdAt: { gte: params.from, lte: params.to },
     },
@@ -271,13 +271,13 @@ async function computeTopKeywords(params: {
   });
 
   const articleCounter = new Map<string, number>();
-  for (const a of articles) {
+  for (const a of rawArticles) {
     if (!a.title) continue;
     const tokens = tokenize(a.title);
     for (const t of tokens) articleCounter.set(t, (articleCounter.get(t) ?? 0) + 1);
   }
 
-  // ✅ 2) 수집된 클립(원천) 제목 키워드
+  // ✅ 수집 클립(원천) 제목 키워드: RawClip.title
   const rawClips = await prisma.rawClip.findMany({
     where: {
       createdAt: { gte: params.from, lte: params.to },
@@ -294,19 +294,20 @@ async function computeTopKeywords(params: {
     for (const t of tokens) clipCounter.set(t, (clipCounter.get(t) ?? 0) + 1);
   }
 
-  // ✅ 응답 키는 프론트 호환 위해 유지(원하면 articles/rawClips로 rename 가능)
   return {
-    issues: topNFromCounter(articleCounter, limit),      // 이제 "기사 키워드 TOP"
-    clipIssues: topNFromCounter(clipCounter, limit),    // 이제 "클립 키워드 TOP"
+    // 프론트 호환 위해 키 이름은 유지 (원하면 rawArticles/rawClips로 rename 가능)
+    issues: topNFromCounter(articleCounter, limit),
+    clipIssues: topNFromCounter(clipCounter, limit),
     meta: {
       from: params.from.toISOString(),
       to: params.to.toISOString(),
-      issueDocs: articles.length,       // 기사 개수
-      clipIssueDocs: rawClips.length,   // 클립 개수
+      issueDocs: rawArticles.length,   // 기사(원천) 개수
+      clipIssueDocs: rawClips.length,  // 클립(원천) 개수
       limit,
     },
   };
 }
+
 
 
 /**
