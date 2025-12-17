@@ -49,7 +49,14 @@ function union<T>(...sets: Set<T>[]) {
   return out;
 }
 
-type DailyTable = "Issue" | "Agenda" | "IssueComment" | "AgendaComment";
+type DailyTable =
+  | "Issue"
+  | "Agenda"
+  | "IssueComment"
+  | "AgendaComment"
+  | "ClipIssue"
+  | "ClipIssueComment";
+
 
 type DailyCountOpts = {
   /** ✅ 등록된 이슈만 집계: Issue.status != 'SUGGESTED' */
@@ -97,12 +104,11 @@ async function dailyCountPostgres(
  * - parentType(enum) 비교 문제 방지: ::text 캐스팅
  */
 async function dailyViewsMapRegisteredOnly(
-  parentType: "issue" | "agenda",
+  parentType: "issue" | "agenda" | "clipIssue",
   since: Date
 ) {
   const sinceKey = dayKeyKST(startOfDay(since));
 
-  // issue: 등록된 이슈만 (status != SUGGESTED)
   if (parentType === "issue") {
     const rows = await prisma.$queryRawUnsafe<Array<{ d: string; c: number }>>(
       `
@@ -118,13 +124,11 @@ async function dailyViewsMapRegisteredOnly(
       parentType,
       sinceKey
     );
-
     const map = new Map<string, number>();
     rows.forEach((r) => map.set(r.d, Number(r.c)));
     return map;
   }
-
-  // agenda: 그대로
+   
   const rows = await prisma.$queryRawUnsafe<Array<{ d: string; c: number }>>(
     `
     SELECT "dayKey" AS d, COUNT(*)::int AS c
@@ -136,11 +140,11 @@ async function dailyViewsMapRegisteredOnly(
     parentType,
     sinceKey
   );
-
   const map = new Map<string, number>();
   rows.forEach((r) => map.set(r.d, Number(r.c)));
   return map;
 }
+
 
 /**
  * ✅ 오늘 issue 조회수(등록된 이슈만)
@@ -159,6 +163,24 @@ async function issueViewsTodayRegisteredOnly(todayKey: string) {
   );
   return Number(rows?.[0]?.c ?? 0);
 }
+
+/**
+ * ✅ 오늘 clipissue 조회수(등록된 이슈만)
+ */
+
+async function clipIssueViewsToday(todayKey: string) {
+  const rows = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+    `
+    SELECT COUNT(*)::int AS c
+    FROM "PageView"
+    WHERE (("parentType"::text) = 'clipIssue')
+      AND "dayKey" = $1
+    `,
+    todayKey
+  );
+  return Number(rows?.[0]?.c ?? 0);
+}
+
 
 /**
  * GET /api/admin/metrics?period=7|30|...
@@ -192,29 +214,32 @@ router.get(
         agendasTotal,
         issueCommentsTotal,
         agendaCommentsTotal,
+        clipIssuesTotal,
+        clipIssueCommentsTotal,
+      
         issuesToday,
         agendasToday,
         issueCommentsToday,
         agendaCommentsToday,
+        clipIssuesToday,
+        clipIssueCommentsToday,
       ] = await Promise.all([
-        // ✅ 등록된 이슈만
         safe(() => prisma.issue.count({ where: issueRegisteredWhere }), 0),
         safe(() => prisma.agenda.count(), 0),
         safe(() => prisma.issueComment.count(), 0),
         safe(() => prisma.agendaComment.count(), 0),
 
-        // ✅ 등록된 이슈 + 오늘
-        safe(
-          () =>
-            prisma.issue.count({
-              where: { ...issueRegisteredWhere, createdAt: { gte: todayStart } },
-            }),
-          0
-        ),
+        safe(() => prisma.clipIssue.count(), 0),
+        safe(() => prisma.clipIssueComment.count(), 0),
+      
+        safe(() => prisma.issue.count({ where: { ...issueRegisteredWhere, createdAt: { gte: todayStart } } }), 0),
         safe(() => prisma.agenda.count({ where: { createdAt: { gte: todayStart } } }), 0),
         safe(() => prisma.issueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
         safe(() => prisma.agendaComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
-      ]);
+      
+        safe(() => prisma.clipIssue.count({ where: { createdAt: { gte: todayStart } } }), 0),
+        safe(() => prisma.clipIssueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
+]);
 
       /* ── DAU / MAU / 7일 활성 ────────────────────── */
       const [
@@ -301,7 +326,7 @@ router.get(
       const days = lastNDates(period);
       const since = daysAgo(period - 1);
 
-      const [mIssue, mAgenda, mIssueC, mAgendaC, mIssueV, mAgendaV] =
+      const [mIssue, mAgenda, mIssueC, mAgendaC, mIssueV, mAgendaV, mClip, mClipC, mClipV] =
         await Promise.all([
           // ✅ 등록된 이슈만
           dailyCountPostgres("Issue", since, { issueRegisteredOnly: true }),
@@ -311,20 +336,19 @@ router.get(
           // ✅ 등록된 이슈 조회수만
           dailyViewsMapRegisteredOnly("issue", since),
           dailyViewsMapRegisteredOnly("agenda", since),
+          dailyCountPostgres("ClipIssue", since),
+          dailyCountPostgres("ClipIssueComment", since),
+          dailyViewsMapRegisteredOnly("clipIssue", since),
         ]);
 
       const todayKey = dayKeyKST();
 
-      const [issuesViewsToday, agendasViewsToday] = await Promise.all([
+      const [issuesViewsToday, agendasViewsToday, clipIssuesViewsToday] = await Promise.all([
         safe(() => issueViewsTodayRegisteredOnly(todayKey), 0),
-        safe(
-          () =>
-            prisma.pageView.count({
-              where: { parentType: "agenda", dayKey: todayKey },
-            }),
-          0
-        ),
+        safe(() => prisma.pageView.count({ where: { parentType: "agenda", dayKey: todayKey } }), 0),
+        safe(() => clipIssueViewsToday(todayKey), 0),
       ]);
+
 
       const timeseries = {
         lastNDays: days.map((d) => ({
@@ -335,6 +359,9 @@ router.get(
           agendas: mAgenda.get(d) ?? 0,
           agendaViews: mAgendaV.get(d) ?? 0,
           agendaComments: mAgendaC.get(d) ?? 0,
+          clipIssues: mClip.get(d) ?? 0,
+          clipIssueViews: mClipV.get(d) ?? 0,
+          clipIssueComments: mClipC.get(d) ?? 0,
         })),
         period,
       };
@@ -348,6 +375,14 @@ router.get(
             viewsToday: issuesViewsToday, // ✅ 등록된 이슈 오늘 조회
             commentsTotal: issueCommentsTotal,
             commentsToday: issueCommentsToday,
+          },
+
+         clipIssues: {
+            total: clipIssuesTotal,
+            today: clipIssuesToday,
+            viewsToday: clipIssuesViewsToday,
+            commentsTotal: clipIssueCommentsTotal,
+            commentsToday: clipIssueCommentsToday,
           },
           agendas: {
             total: agendasTotal,
