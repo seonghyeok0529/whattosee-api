@@ -1,11 +1,13 @@
 // src/routes/adminMetrics.ts
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { PrismaClient, Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { adminAuth } from "../middleware/adminAuth";
 
-const prisma = new PrismaClient();
+// ✅ IMPORTANT: metrics에서도 싱글톤 prisma 사용 (커넥션 꼬임/0 반환 방지)
+import { prisma } from "../lib/prisma";
+
 const router = Router();
 
 /* ─────────────────────────────────────────────
@@ -36,13 +38,16 @@ function lastNDates(n: number) {
   return out;
 }
 
-async function safe<T>(fn: () => Promise<T>, fb: T): Promise<T> {
+// ✅ 에러를 삼키면 "총계가 0"으로 보이기만 해서 문제를 못 잡음 → label 로그
+async function safe<T>(label: string, fn: () => Promise<T>, fb: T): Promise<T> {
   try {
     return await fn();
-  } catch {
+  } catch (e) {
+    console.error(`[adminMetrics] ${label} failed:`, e);
     return fb;
   }
 }
+
 function union<T>(...sets: Set<T>[]) {
   const out = new Set<T>();
   for (const s of sets) for (const v of s) out.add(v);
@@ -56,7 +61,6 @@ type DailyTable =
   | "AgendaComment"
   | "ClipIssue"
   | "ClipIssueComment";
-
 
 type DailyCountOpts = {
   /** ✅ 등록된 이슈만 집계: Issue.status != 'SUGGESTED' */
@@ -128,7 +132,7 @@ async function dailyViewsMapRegisteredOnly(
     rows.forEach((r) => map.set(r.d, Number(r.c)));
     return map;
   }
-   
+
   const rows = await prisma.$queryRawUnsafe<Array<{ d: string; c: number }>>(
     `
     SELECT "dayKey" AS d, COUNT(*)::int AS c
@@ -144,7 +148,6 @@ async function dailyViewsMapRegisteredOnly(
   rows.forEach((r) => map.set(r.d, Number(r.c)));
   return map;
 }
-
 
 /**
  * ✅ 오늘 issue 조회수(등록된 이슈만)
@@ -165,22 +168,20 @@ async function issueViewsTodayRegisteredOnly(todayKey: string) {
 }
 
 /**
- * ✅ 오늘 clipissue 조회수(등록된 이슈만)
+ * ✅ 오늘 clipIssue 조회수
  */
-
 async function clipIssueViewsToday(todayKey: string) {
   const rows = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
     `
     SELECT COUNT(*)::int AS c
     FROM "PageView"
-    WHERE (("parentType"::text) = 'clipIssue')
+    WHERE ("parentType"::text) = 'clipIssue'
       AND "dayKey" = $1
     `,
     todayKey
   );
   return Number(rows?.[0]?.c ?? 0);
 }
-
 
 /**
  * GET /api/admin/metrics?period=7|30|...
@@ -216,7 +217,7 @@ router.get(
         agendaCommentsTotal,
         clipIssuesTotal,
         clipIssueCommentsTotal,
-      
+
         issuesToday,
         agendasToday,
         issueCommentsToday,
@@ -224,22 +225,30 @@ router.get(
         clipIssuesToday,
         clipIssueCommentsToday,
       ] = await Promise.all([
-        safe(() => prisma.issue.count({ where: issueRegisteredWhere }), 0),
-        safe(() => prisma.agenda.count(), 0),
-        safe(() => prisma.issueComment.count(), 0),
-        safe(() => prisma.agendaComment.count(), 0),
+        safe("issuesTotal", () => prisma.issue.count({ where: issueRegisteredWhere }), 0),
+        safe("agendasTotal", () => prisma.agenda.count(), 0),
+        safe("issueCommentsTotal", () => prisma.issueComment.count(), 0),
+        safe("agendaCommentsTotal", () => prisma.agendaComment.count(), 0),
 
-        safe(() => prisma.clipIssue.count(), 0),
-        safe(() => prisma.clipIssueComment.count(), 0),
-      
-        safe(() => prisma.issue.count({ where: { ...issueRegisteredWhere, createdAt: { gte: todayStart } } }), 0),
-        safe(() => prisma.agenda.count({ where: { createdAt: { gte: todayStart } } }), 0),
-        safe(() => prisma.issueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
-        safe(() => prisma.agendaComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
-      
-        safe(() => prisma.clipIssue.count({ where: { createdAt: { gte: todayStart } } }), 0),
-        safe(() => prisma.clipIssueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
-]);
+        // ✅ 문제 지점: 여기 실패하면 예전엔 조용히 0으로 떨어졌음 → 이제 로그 남음
+        safe("clipIssuesTotal", () => prisma.clipIssue.count(), 0),
+        safe("clipIssueCommentsTotal", () => prisma.clipIssueComment.count(), 0),
+
+        safe(
+          "issuesToday",
+          () =>
+            prisma.issue.count({
+              where: { ...issueRegisteredWhere, createdAt: { gte: todayStart } },
+            }),
+          0
+        ),
+        safe("agendasToday", () => prisma.agenda.count({ where: { createdAt: { gte: todayStart } } }), 0),
+        safe("issueCommentsToday", () => prisma.issueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
+        safe("agendaCommentsToday", () => prisma.agendaComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
+
+        safe("clipIssuesToday", () => prisma.clipIssue.count({ where: { createdAt: { gte: todayStart } } }), 0),
+        safe("clipIssueCommentsToday", () => prisma.clipIssueComment.count({ where: { createdAt: { gte: todayStart } } }), 0),
+      ]);
 
       /* ── DAU / MAU / 7일 활성 ────────────────────── */
       const [
@@ -248,31 +257,220 @@ router.get(
         actA, actAC, actIC, actV, actAL, actCL, actICL,
       ] = await Promise.all([
         // DAU (24h)
-        safe(async () => new Set((await prisma.agenda.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.agendaComment.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.issueComment.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.vote.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.agendaLike.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.commentLike.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.issueCommentLike.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
+        safe(
+          "dauA",
+          async () =>
+            new Set(
+              (await prisma.agenda.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "dauAC",
+          async () =>
+            new Set(
+              (await prisma.agendaComment.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "dauIC",
+          async () =>
+            new Set(
+              (await prisma.issueComment.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "dauV",
+          async () =>
+            new Set(
+              (await prisma.vote.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "dauAL",
+          async () =>
+            new Set(
+              (await prisma.agendaLike.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "dauCL",
+          async () =>
+            new Set(
+              (await prisma.commentLike.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "dauICL",
+          async () =>
+            new Set(
+              (await prisma.issueCommentLike.findMany({ where: { createdAt: { gte: last1d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
 
         // MAU (30d)
-        safe(async () => new Set((await prisma.agenda.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.agendaComment.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.issueComment.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.vote.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.agendaLike.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.commentLike.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.issueCommentLike.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
+        safe(
+          "mauA",
+          async () =>
+            new Set(
+              (await prisma.agenda.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "mauAC",
+          async () =>
+            new Set(
+              (await prisma.agendaComment.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "mauIC",
+          async () =>
+            new Set(
+              (await prisma.issueComment.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "mauV",
+          async () =>
+            new Set(
+              (await prisma.vote.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "mauAL",
+          async () =>
+            new Set(
+              (await prisma.agendaLike.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "mauCL",
+          async () =>
+            new Set(
+              (await prisma.commentLike.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "mauICL",
+          async () =>
+            new Set(
+              (await prisma.issueCommentLike.findMany({ where: { createdAt: { gte: last30d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
 
         // active 7d
-        safe(async () => new Set((await prisma.agenda.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.agendaComment.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.issueComment.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.vote.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.agendaLike.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.commentLike.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
-        safe(async () => new Set((await prisma.issueCommentLike.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } })).map(r => r.userId).filter(Boolean) as string[]), new Set<string>()),
+        safe(
+          "actA",
+          async () =>
+            new Set(
+              (await prisma.agenda.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "actAC",
+          async () =>
+            new Set(
+              (await prisma.agendaComment.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "actIC",
+          async () =>
+            new Set(
+              (await prisma.issueComment.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "actV",
+          async () =>
+            new Set(
+              (await prisma.vote.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "actAL",
+          async () =>
+            new Set(
+              (await prisma.agendaLike.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "actCL",
+          async () =>
+            new Set(
+              (await prisma.commentLike.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
+        safe(
+          "actICL",
+          async () =>
+            new Set(
+              (await prisma.issueCommentLike.findMany({ where: { createdAt: { gte: last7d } }, select: { userId: true } }))
+                .map((r) => r.userId)
+                .filter(Boolean) as string[]
+            ),
+          new Set<string>()
+        ),
       ]);
 
       const dau = union(dauA, dauAC, dauIC, dauV, dauAL, dauCL, dauICL).size;
@@ -280,18 +478,22 @@ router.get(
       const active7d = union(actA, actAC, actIC, actV, actAL, actCL, actICL).size;
 
       /* ── CTI 평균/분포 ───────────────────────────── */
-      const usersWithCTI = await safe(async () => {
-        return prisma.user.findMany({
-          select: { ctiType: true, ctiScores: true },
-          where: {
-            AND: [
-              { ctiScores: { not: (Prisma as any).DbNull } as any },
-              { ctiScores: { not: (Prisma as any).JsonNull } as any },
-            ],
-          },
-          take: 10000,
-        });
-      }, [] as Array<{ ctiType: string | null; ctiScores: any }>);
+      const usersWithCTI = await safe(
+        "usersWithCTI",
+        async () => {
+          return prisma.user.findMany({
+            select: { ctiType: true, ctiScores: true },
+            where: {
+              AND: [
+                { ctiScores: { not: (Prisma as any).DbNull } as any },
+                { ctiScores: { not: (Prisma as any).JsonNull } as any },
+              ],
+            },
+            take: 10000,
+          });
+        },
+        [] as Array<{ ctiType: string | null; ctiScores: any }>
+      );
 
       let avgScores: { E: number; S: number; P: number } | null = null;
       const typeDist: Record<string, number> = {};
@@ -314,12 +516,13 @@ router.get(
           const t = u.ctiType ?? "UNKNOWN";
           typeDist[t] = (typeDist[t] ?? 0) + 1;
         }
-        if (n > 0)
+        if (n > 0) {
           avgScores = {
             E: +(e / n).toFixed(2),
             S: +(s / n).toFixed(2),
             P: +(p / n).toFixed(2),
           };
+        }
       }
 
       /* ── 일일 추이(최근 N일) ────────────────────── */
@@ -328,27 +531,43 @@ router.get(
 
       const [mIssue, mAgenda, mIssueC, mAgendaC, mIssueV, mAgendaV, mClip, mClipC, mClipV] =
         await Promise.all([
-          // ✅ 등록된 이슈만
-          dailyCountPostgres("Issue", since, { issueRegisteredOnly: true }),
-          dailyCountPostgres("Agenda", since),
-          dailyCountPostgres("IssueComment", since),
-          dailyCountPostgres("AgendaComment", since),
-          // ✅ 등록된 이슈 조회수만
-          dailyViewsMapRegisteredOnly("issue", since),
-          dailyViewsMapRegisteredOnly("agenda", since),
-          dailyCountPostgres("ClipIssue", since),
-          dailyCountPostgres("ClipIssueComment", since),
-          dailyViewsMapRegisteredOnly("clipIssue", since),
+          safe("mIssue", () => dailyCountPostgres("Issue", since, { issueRegisteredOnly: true }), new Map<string, number>()),
+          safe("mAgenda", () => dailyCountPostgres("Agenda", since), new Map<string, number>()),
+          safe("mIssueC", () => dailyCountPostgres("IssueComment", since), new Map<string, number>()),
+          safe("mAgendaC", () => dailyCountPostgres("AgendaComment", since), new Map<string, number>()),
+          safe("mIssueV", () => dailyViewsMapRegisteredOnly("issue", since), new Map<string, number>()),
+          safe("mAgendaV", () => dailyViewsMapRegisteredOnly("agenda", since), new Map<string, number>()),
+          safe("mClip", () => dailyCountPostgres("ClipIssue", since), new Map<string, number>()),
+          safe("mClipC", () => dailyCountPostgres("ClipIssueComment", since), new Map<string, number>()),
+          safe("mClipV", () => dailyViewsMapRegisteredOnly("clipIssue", since), new Map<string, number>()),
         ]);
 
       const todayKey = dayKeyKST();
 
       const [issuesViewsToday, agendasViewsToday, clipIssuesViewsToday] = await Promise.all([
-        safe(() => issueViewsTodayRegisteredOnly(todayKey), 0),
-        safe(() => prisma.pageView.count({ where: { parentType: "agenda", dayKey: todayKey } }), 0),
-        safe(() => clipIssueViewsToday(todayKey), 0),
+        safe("issuesViewsToday", () => issueViewsTodayRegisteredOnly(todayKey), 0),
+        safe("agendasViewsToday", () => prisma.pageView.count({ where: { parentType: "agenda", dayKey: todayKey } }), 0),
+        safe("clipIssuesViewsToday", () => clipIssueViewsToday(todayKey), 0),
       ]);
 
+      // ✅ (옵션) 문제 재현 시 "Prisma count vs SQL count" 비교 로그
+      // (원하면 계속 켜둬도 되고, 진단 후 지워도 됨)
+      const clipIssueSqlCount = await safe(
+        "clipIssueSqlCount",
+        async () => {
+          const rows = await prisma.$queryRawUnsafe<Array<{ c: number }>>(
+            `SELECT COUNT(*)::int AS c FROM "ClipIssue"`
+          );
+          return Number(rows?.[0]?.c ?? 0);
+        },
+        -1
+      );
+      if (clipIssueSqlCount >= 0 && clipIssueSqlCount !== clipIssuesTotal) {
+        console.warn(
+          "[adminMetrics] ClipIssue count mismatch:",
+          { prisma: clipIssuesTotal, sql: clipIssueSqlCount }
+        );
+      }
 
       const timeseries = {
         lastNDays: days.map((d) => ({
@@ -370,14 +589,13 @@ router.get(
         ok: true,
         data: {
           issues: {
-            total: issuesTotal, // ✅ 등록된 이슈 총계
-            today: issuesToday, // ✅ 등록된 이슈 오늘 생성
-            viewsToday: issuesViewsToday, // ✅ 등록된 이슈 오늘 조회
+            total: issuesTotal,
+            today: issuesToday,
+            viewsToday: issuesViewsToday,
             commentsTotal: issueCommentsTotal,
             commentsToday: issueCommentsToday,
           },
-
-         clipIssues: {
+          clipIssues: {
             total: clipIssuesTotal,
             today: clipIssuesToday,
             viewsToday: clipIssuesViewsToday,
