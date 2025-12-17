@@ -90,7 +90,7 @@ async function dailyViewsMap(parentType: "issue" | "agenda", since: Date) {
     `
     SELECT "dayKey" AS d, COUNT(*)::int AS c
     FROM ${t}
-    WHERE "parentType" = $1 AND "dayKey" >= $2
+    WHERE ("parentType"::text) = $1 AND "dayKey" >= $2
     GROUP BY "dayKey"
     ORDER BY d ASC
     `,
@@ -98,13 +98,12 @@ async function dailyViewsMap(parentType: "issue" | "agenda", since: Date) {
     sinceKey
   );
 
-  // 만약 Postgres가 enum 비교에서 트집 잡으면 위 WHERE를 아래로 교체:
-  // WHERE ("parentType"::text) = $1 AND "dayKey" >= $2
-
   const map = new Map<string, number>();
   rows.forEach((r) => map.set(r.d, Number(r.c)));
   return map;
 }
+
+
 
 /**
  * GET /api/admin/metrics?period=7|30|...
