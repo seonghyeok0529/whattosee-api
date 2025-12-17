@@ -3,7 +3,7 @@ import Parser from "rss-parser";
 import prisma from "../../lib/prisma.js";
 import crypto from "crypto";
 import { Prisma } from "@prisma/client";
-import { normalizeUrl } from "./utils/normalizeUrl.js";
+import { normalizeUrl } from "./util/normalizeUrl.js";
 
 type FeedCfg = { outlet: string; url: string; side: "left" | "center" | "right" | "neutral" };
 
