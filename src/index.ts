@@ -39,8 +39,8 @@ app.set("trust proxy", 1);
 
 //app.set("etag",false);
 
-/** CORS */
-const allowedOrigins = [
+/** CORS *//** CORS */
+const allowedOrigins = new Set([
   process.env.CORS_ORIGIN ?? "http://localhost:3000",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -49,21 +49,28 @@ const allowedOrigins = [
   "http://localhost:4173",
   "http://127.0.0.1:4173",
   "https://whattosee.now",
-  // ✅ Azure Web App 도메인 추가
+  "https://www.whattosee.now", // ✅ 이거 꼭 추가
   "https://whattosee-api-f9f3h2fze0gncffe.koreacentral-01.azurewebsites.net",
-];
+]);
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // 앱/클라이언트/서버간 내부 호출 허용
-      return cb(null, allowedOrigins.includes(origin));
+      // origin 없는 요청(서버-서버/앱 내부 호출 등)은 허용
+      if (!origin) return cb(null, true);
+
+      if (allowedOrigins.has(origin)) return cb(null, true);
+
+      // ✅ 여기서 조용히 false 주지 말고 에러로 찍어라 (원인 바로 보임)
+      console.warn("[CORS BLOCKED] origin:", origin);
+      return cb(new Error(`CORS blocked: ${origin}`), false);
     },
     credentials: true,
     methods: ["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 
 /** Common */
 app.use(express.json());
@@ -85,7 +92,12 @@ app.get("/debug/db", async (_req, res) => {
 });
 
 /** ✅ 세션을 모든 /api 라우터 **앞**에 */
-app.use("/api", ensureSession);
+app.use("/api", (req, res, next) => {
+  // auth 계열은 세션 강제하지 않기 (refresh 포함)
+  if (req.path.startsWith("/auth")) return next();
+  return ensureSession(req, res, next);
+});
+
 
 /** Routers */
 app.use("/api/auth", authRouter);
