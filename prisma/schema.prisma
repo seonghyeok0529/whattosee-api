@@ -105,6 +105,12 @@ model User {
   ctiType   String?
   ctiScores Json?
 
+  irtType      String?
+  irtScores    Json?
+  irtAnswers   Json?
+  irtMeta      Json?
+  irtUpdatedAt DateTime?
+
   gender        Gender?   // Kakao/Naver 프로필 → MALE/FEMALE/UNKNOWN
   birthYear     Int?      // 1997 같이 연도만
   ageRange      String?   // "20-29", "30-39" 처럼 provider 원본 그대로 저장해도 됨
