@@ -68,6 +68,8 @@ router.get("/", requireAuth as any, async (req, res) => {
  * PATCH /api/profile
  *
  * ✅ 추가 지원 필드:
+ * - ctiType: string | null
+ * - ctiScores: Json | null
  * - irtType: string | null
  * - irtScores: Json | null
  */
@@ -84,6 +86,10 @@ router.patch("/", requireAuth as any, async (req, res) => {
     privacyAgreedAt,
     marketingOptIn,
 
+    // ✅ CTI 추가
+    ctiType,
+    ctiScores,
+
     // ✅ IRT 추가
     irtType,
     irtScores,
@@ -95,6 +101,9 @@ router.patch("/", requireAuth as any, async (req, res) => {
     tosAgreedAt?: string | boolean;
     privacyAgreedAt?: string | boolean;
     marketingOptIn?: boolean;
+
+    ctiType?: string | null;
+    ctiScores?: unknown | null; // Prisma Json 호환
 
     irtType?: string | null;
     irtScores?: unknown | null; // Prisma Json 호환
@@ -113,6 +122,20 @@ router.patch("/", requireAuth as any, async (req, res) => {
   if (typeof bio === "string") data.bio = bio;
 
   if (Array.isArray(interests)) data.interests = interests as any;
+
+  // ✅ CTI 저장
+  if (typeof ctiType === "string") {
+    data.ctiType = ctiType.trim() || null;
+  } else if (ctiType === null) {
+    data.ctiType = null;
+  }
+
+  // ctiScores는 object/array/number/string 등 Json 가능
+  // - undefined: 업데이트 안 함
+  // - null: null로 초기화
+  if (typeof ctiScores !== "undefined") {
+    data.ctiScores = ctiScores as any;
+  }
 
   // ✅ IRT 저장
   if (typeof irtType === "string") {
