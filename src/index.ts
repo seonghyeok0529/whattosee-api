@@ -1,9 +1,10 @@
+// src/index.ts
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
-import { PrismaClient } from "@prisma/client"; // ✅ Prisma 추가
+import { PrismaClient } from "@prisma/client";
 
 dotenv.config();
 
@@ -13,6 +14,7 @@ import authMe from "./routes/auth.me.js";
 import profileRouter from "./routes/profile.js";
 import agendasRouter from "./routes/agendas.js";
 import ctiRouter from "./routes/cti.js";
+import irtRouter from "./routes/irt.js"; // ✅ IRT 추가
 import likesRouter from "./routes/likes.js";
 import searchRouter from "./routes/search.js";
 import { adminIngestRouter } from "./routes/adminIngest.js";
@@ -30,16 +32,17 @@ import adminNewsClipsRouter from "./routes/adminNewsClips.js";
 import communityRoutes from "./routes/community.js";
 import adminCommunityRouter from "./routes/adminCommunity.js";
 
-// ✅ 단일 세션 미들웨어만 사용
 import { ensureSession } from "./middleware/ensureSession";
 
 const app = express();
-const prisma = new PrismaClient(); // ✅ Prisma 인스턴스
+const prisma = new PrismaClient();
+
 app.set("trust proxy", 1);
 
-//app.set("etag",false);
+/* ======================================================
+ * CORS
+ * ====================================================== */
 
-/** CORS *//** CORS */
 const allowedOrigins = new Set([
   process.env.CORS_ORIGIN ?? "http://localhost:3000",
   "http://localhost:3000",
@@ -49,19 +52,16 @@ const allowedOrigins = new Set([
   "http://localhost:4173",
   "http://127.0.0.1:4173",
   "https://whattosee.now",
-  "https://www.whattosee.now", // ✅ 이거 꼭 추가
+  "https://www.whattosee.now",
   "https://whattosee-api-f9f3h2fze0gncffe.koreacentral-01.azurewebsites.net",
 ]);
 
 app.use(
   cors({
     origin: (origin, cb) => {
-      // origin 없는 요청(서버-서버/앱 내부 호출 등)은 허용
       if (!origin) return cb(null, true);
-
       if (allowedOrigins.has(origin)) return cb(null, true);
 
-      // ✅ 여기서 조용히 false 주지 말고 에러로 찍어라 (원인 바로 보임)
       console.warn("[CORS BLOCKED] origin:", origin);
       return cb(new Error(`CORS blocked: ${origin}`), false);
     },
@@ -71,16 +71,22 @@ app.use(
   })
 );
 
+/* ======================================================
+ * Common Middleware
+ * ====================================================== */
 
-/** Common */
 app.use(express.json());
 app.use(cookieParser());
 app.use(morgan("dev"));
 
-/** Health */
-app.get("/healthz", (_req, res) => res.json({ status: "ok" }));
+/* ======================================================
+ * Health & Debug
+ * ====================================================== */
 
-/** ✅ DB 연결 확인용 라우트 (배포/디버깅용) */
+app.get("/healthz", (_req, res) => {
+  res.json({ status: "ok" });
+});
+
 app.get("/debug/db", async (_req, res) => {
   try {
     const userCount = await prisma.user.count();
@@ -91,46 +97,67 @@ app.get("/debug/db", async (_req, res) => {
   }
 });
 
-/** ✅ 세션을 모든 /api 라우터 **앞**에 */
+/* ======================================================
+ * 세션 강제 (auth 제외)
+ * ====================================================== */
+
 app.use("/api", (req, res, next) => {
-  // auth 계열은 세션 강제하지 않기 (refresh 포함)
   if (req.path.startsWith("/auth")) return next();
   return ensureSession(req, res, next);
 });
 
+/* ======================================================
+ * Routers
+ * ====================================================== */
 
-/** Routers */
 app.use("/api/auth", authRouter);
 app.use("/api/auth", authMe);
-//app.use("/api/admin", adminRouter);
+
 app.use("/api/comments", commentsRouter);
 app.use("/api/profile", profileRouter);
-app.use("/api/agendas", agendasRouter);
+
 app.use("/api/cti", ctiRouter);
+app.use("/api/irt", irtRouter); // ✅ IRT 연결
+
+app.use("/api/agendas", agendasRouter);
 app.use("/api/likes", likesRouter);
 app.use("/api/search", searchRouter);
+
 app.use("/api/admin", adminIngestRouter);
 app.use("/api/issues", issuesRouter);
 app.use("/api/votes", votesRouter);
 app.use("/api/issues", issueCommentsRouter);
+
 app.use("/api/admin/cluster", adminCluster);
 app.use("/api", adminMetricsRouter);
-app.use("/api/admin", adminIssueRoutes); // 여기는 이슈, 사용자, 유저, 사람, 신고
-app.use("/api/admin", adminAgendaRouter); // 여기는 Agenda만
+app.use("/api/admin", adminIssueRoutes);
+app.use("/api/admin", adminAgendaRouter);
 app.use("/api/news-clips", newsClipsRouter);
 app.use("/api", clipIssueCommentsRouter);
 app.use("/api/admin", adminNewsClipsRouter);
 app.use("/api/admin", adminCommunityRouter);
 app.use("/api", communityRoutes);
 
-/** ✅ 트래킹 (세션 뒤) */
+/* ======================================================
+ * Tracking
+ * ====================================================== */
+
 app.use("/api", trackRouter);
 
-/** 404 */
-app.use((_req, res) => res.status(404).json({ error: "NOT_FOUND" }));
+/* ======================================================
+ * 404
+ * ====================================================== */
 
-/** Server */
+app.use((_req, res) => {
+  res.status(404).json({ error: "NOT_FOUND" });
+});
+
+/* ======================================================
+ * Server Start
+ * ====================================================== */
+
 const PORT = process.env.PORT || 8000;
+
 app.listen(PORT, () => {
   console.log(`✅ API server running on http://localhost:${PORT}`);
 });
