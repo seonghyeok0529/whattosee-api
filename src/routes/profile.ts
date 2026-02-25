@@ -25,11 +25,16 @@ router.get("/", requireAuth as any, async (req, res) => {
       interests: true,
       ctiType: true,
       ctiScores: true,
+
+      // ✅ IRT 추가
+      irtType: true,
+      irtScores: true,
+
       createdAt: true,
       role: true,
       isAdmin: true,
 
-      // 🔥 온보딩/약관 관련 필드 추가
+      // 🔥 온보딩/약관 관련 필드
       tosAgreedAt: true,
       privacyAgreedAt: true,
       marketingAgreed: true,
@@ -61,6 +66,10 @@ router.get("/", requireAuth as any, async (req, res) => {
 /**
  * 내 프로필 업데이트(온보딩 포함)
  * PATCH /api/profile
+ *
+ * ✅ 추가 지원 필드:
+ * - irtType: string | null
+ * - irtScores: Json | null
  */
 router.patch("/", requireAuth as any, async (req, res) => {
   const userId = (req as any).userId as string | undefined;
@@ -74,6 +83,10 @@ router.patch("/", requireAuth as any, async (req, res) => {
     tosAgreedAt,
     privacyAgreedAt,
     marketingOptIn,
+
+    // ✅ IRT 추가
+    irtType,
+    irtScores,
   } = (req.body ?? {}) as {
     username?: string;
     nickname?: string;
@@ -82,6 +95,9 @@ router.patch("/", requireAuth as any, async (req, res) => {
     tosAgreedAt?: string | boolean;
     privacyAgreedAt?: string | boolean;
     marketingOptIn?: boolean;
+
+    irtType?: string | null;
+    irtScores?: unknown | null; // Prisma Json 호환
   };
 
   const data: any = {};
@@ -98,6 +114,20 @@ router.patch("/", requireAuth as any, async (req, res) => {
 
   if (Array.isArray(interests)) data.interests = interests as any;
 
+  // ✅ IRT 저장
+  if (typeof irtType === "string") {
+    data.irtType = irtType.trim() || null;
+  } else if (irtType === null) {
+    data.irtType = null;
+  }
+
+  // irtScores는 object/array/number/string 등 Json 가능
+  // - undefined: 업데이트 안 함
+  // - null: null로 초기화
+  if (typeof irtScores !== "undefined") {
+    data.irtScores = irtScores as any;
+  }
+
   // 🔥 약관 동의 시간 저장
   if (tosAgreedAt) {
     data.tosAgreedAt =
@@ -105,14 +135,13 @@ router.patch("/", requireAuth as any, async (req, res) => {
   }
   if (privacyAgreedAt) {
     data.privacyAgreedAt =
-      typeof privacyAgreedAt === "string"
-        ? new Date(privacyAgreedAt)
-        : new Date();
+      typeof privacyAgreedAt === "string" ? new Date(privacyAgreedAt) : new Date();
   }
 
   // 마케팅 수신 동의
-  if (typeof marketingOptIn === "boolean")
+  if (typeof marketingOptIn === "boolean") {
     data.marketingAgreed = marketingOptIn;
+  }
 
   const updated = await prisma.user.update({
     where: { id: userId },
@@ -126,11 +155,16 @@ router.patch("/", requireAuth as any, async (req, res) => {
       interests: true,
       ctiType: true,
       ctiScores: true,
+
+      // ✅ IRT 추가
+      irtType: true,
+      irtScores: true,
+
       createdAt: true,
       role: true,
       isAdmin: true,
 
-      // 🔥 여기에도 동일하게 포함
+      // 🔥 동일하게 포함
       tosAgreedAt: true,
       privacyAgreedAt: true,
       marketingAgreed: true,
@@ -144,9 +178,7 @@ router.patch("/", requireAuth as any, async (req, res) => {
 
   const isAdmin =
     updated.role === "admin" ||
-    (updated.email
-      ? allowList.includes(updated.email.toLowerCase())
-      : false) ||
+    (updated.email ? allowList.includes(updated.email.toLowerCase()) : false) ||
     updated.isAdmin === true;
 
   return res.json({
@@ -182,15 +214,12 @@ router.get("/stats", requireAuth as any, async (req, res, next) => {
       select: { side: true },
     });
 
-    const articleProgressiveCount = articleLogs.filter(
-      (l) => l.side === "left"
-    ).length;
-    const articleConservativeCount = articleLogs.filter(
-      (l) => l.side === "right"
-    ).length;
+    const articleProgressiveCount = articleLogs.filter((l) => l.side === "left")
+      .length;
+    const articleConservativeCount = articleLogs.filter((l) => l.side === "right")
+      .length;
 
-    const articleTotal =
-      articleProgressiveCount + articleConservativeCount;
+    const articleTotal = articleProgressiveCount + articleConservativeCount;
 
     const articleViewRatio = {
       progressive: articleTotal
@@ -214,9 +243,7 @@ router.get("/stats", requireAuth as any, async (req, res, next) => {
     const clipProgressiveCount = clipLogs.filter(
       (l) => l.group === "progressive"
     ).length;
-    const clipPublicCount = clipLogs.filter(
-      (l) => l.group === "public"
-    ).length;
+    const clipPublicCount = clipLogs.filter((l) => l.group === "public").length;
     const clipConservativeCount = clipLogs.filter(
       (l) => l.group === "conservative"
     ).length;
@@ -228,9 +255,7 @@ router.get("/stats", requireAuth as any, async (req, res, next) => {
       progressive: clipTotal
         ? Math.round((clipProgressiveCount / clipTotal) * 100)
         : 0,
-      public: clipTotal
-        ? Math.round((clipPublicCount / clipTotal) * 100)
-        : 0,
+      public: clipTotal ? Math.round((clipPublicCount / clipTotal) * 100) : 0,
       conservative: clipTotal
         ? Math.round((clipConservativeCount / clipTotal) * 100)
         : 0,
@@ -375,37 +400,33 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
       createdAt: p.createdAt.toISOString(),
     }));
 
-    const [
-      issueComments,
-      agendaComments,
-      clipIssueComments,
-      postComments,
-    ] = await Promise.all([
-      prisma.issueComment.findMany({
-        where: { userId },
-        include: {
-          issue: { select: { id: true, title: true } },
-        },
-      }),
-      prisma.agendaComment.findMany({
-        where: { userId },
-        include: {
-          agenda: { select: { id: true, title: true } },
-        },
-      }),
-      prisma.clipIssueComment.findMany({
-        where: { userId },
-        include: {
-          clipIssue: { select: { id: true, title: true } },
-        },
-      }),
-      prisma.communityPostComment.findMany({
-        where: { userId },
-        include: {
-          post: { select: { id: true, title: true } },
-        },
-      }),
-    ]);
+    const [issueComments, agendaComments, clipIssueComments, postComments] =
+      await Promise.all([
+        prisma.issueComment.findMany({
+          where: { userId },
+          include: {
+            issue: { select: { id: true, title: true } },
+          },
+        }),
+        prisma.agendaComment.findMany({
+          where: { userId },
+          include: {
+            agenda: { select: { id: true, title: true } },
+          },
+        }),
+        prisma.clipIssueComment.findMany({
+          where: { userId },
+          include: {
+            clipIssue: { select: { id: true, title: true } },
+          },
+        }),
+        prisma.communityPostComment.findMany({
+          where: { userId },
+          include: {
+            post: { select: { id: true, title: true } },
+          },
+        }),
+      ]);
 
     const issueCommentItems = issueComments.map((c) => ({
       id: `issueComment_${c.id}`,
@@ -460,8 +481,7 @@ router.get("/history", requireAuth as any, async (req, res, next) => {
     ];
 
     items.sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+      (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
 
     const limited = items.slice(0, 200);
