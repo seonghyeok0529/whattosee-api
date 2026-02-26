@@ -337,6 +337,25 @@ model Issue {
   // 🔥 새 컨텐츠 모듈
   talkingPoints IssueTalkingPoint[]
   sensemaking   IssueSensemaking?
+
+  frameGroupCache IssueFrameGroupCache?
+}
+
+model IssueFrameGroupCache {
+  id          String   @id @default(cuid())
+  issueId     String   @unique
+  payload     Json
+  model       String
+  attempts    Int
+  articleCount Int
+  generatedAt DateTime
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
 }
 
 model IssueRelation {
@@ -935,4 +954,3 @@ model YoutubeChannelCursor {
 
   @@index([lastPublishedAt])
 }
-
