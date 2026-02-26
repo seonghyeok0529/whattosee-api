@@ -6,8 +6,10 @@ on:
   workflow_dispatch:
 
 env:
-  AZURE_WEBAPP_NAME: whattosee-api
-  AZURE_WEBAPP_PACKAGE_PATH: '.'        # 루트 전체 배포
+  # ✅ 고정 이름 대신 Repository Variable(AZURE_WEBAPP_NAME) 우선 사용
+  #    미설정 시 기존 기본값으로 fallback
+  AZURE_WEBAPP_NAME: ${{ vars.AZURE_WEBAPP_NAME || 'whattosee-api' }}
+  AZURE_WEBAPP_PACKAGE_PATH: '.'
   NODE_VERSION: '20.x'
 
 permissions:
@@ -28,11 +30,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'npm'
 
-      - name: Install extra types
-        run: npm install -D @types/he  
-
       - name: Install dependencies
-        run: npm install
+        run: npm ci
 
       - name: Build (TypeScript)
         run: npm run build --if-present

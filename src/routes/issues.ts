@@ -4,7 +4,8 @@ import prisma from "../lib/prisma.js";
 import { IssueStatus, type SourceSide } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { getOrCreateIssueSummary } from "../services/issueSummary.js";
-import { generateSideSummary } from "@/services/generateSideSummary.js";
+import { generateSideSummary } from "../services/generateSideSummary.js";
+import { getOrCreateIssueFrameGroups } from "../services/issueFrameGroups.js";
 import { OpenAI } from "openai";
 
 export const issuesRouter = Router();
@@ -263,6 +264,23 @@ issuesRouter.get("/", async (req, res) => {
   const nextCursor = hasNext ? raw[take].id : null;
 
   res.json({ items: sliced, nextCursor });
+});
+
+issuesRouter.post("/:issueId/frame-groups", async (req, res) => {
+  try {
+    const { issueId } = req.params;
+    const force = String(req.query.force ?? "false").toLowerCase() === "true";
+
+    const data = await getOrCreateIssueFrameGroups(issueId, force);
+    return res.json(data);
+  } catch (err: any) {
+    if (String(err?.message ?? "") === "ISSUE_NOT_FOUND") {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+
+    console.error("POST /issues/:issueId/frame-groups error", err);
+    return res.status(500).json({ error: "INTERNAL_ERROR" });
+  }
 });
 
 /**
