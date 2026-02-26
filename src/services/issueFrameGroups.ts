@@ -1,6 +1,6 @@
 import { z } from "zod";
-import prisma from "../lib/prisma.js";
-import { openai, DEFAULT_MODEL } from "../lib/openai.js";
+import prisma from "@/lib/prisma.js";
+import { openai, DEFAULT_MODEL } from "@/lib/openai.js";
 
 const FRAME_GROUP_TTL_MS = 6 * 60 * 60 * 1000;
 const MAX_ARTICLES = 50;
