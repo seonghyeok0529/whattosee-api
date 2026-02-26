@@ -4,7 +4,7 @@ import prisma from "../lib/prisma.js";
 import { IssueStatus, type SourceSide } from "@prisma/client";
 import { requireAuth } from "../middleware/requireAuth";
 import { getOrCreateIssueSummary } from "../services/issueSummary.js";
-import { generateSideSummary } from "@/services/generateSideSummary.js";
+import { generateSideSummary } from "../services/generateSideSummary.js";
 import { getOrCreateIssueFrameGroups } from "../services/issueFrameGroups.js";
 import { OpenAI } from "openai";
 
