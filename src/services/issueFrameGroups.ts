@@ -255,23 +255,32 @@ export async function getOrCreateIssueFrameGroups(issueId: string, force = false
 
   if (sampledArticles.length > 0) {
     const prompt = buildPrompt(issue.title, issue.summary, sampledArticles);
-    const result = await classifyWithRetry(async (p) => {
-      const completion = await openai.chat.completions.create({
-        model: DEFAULT_MODEL,
-        temperature: 0.2,
-        messages: [
-          {
-            role: "system",
-            content: "너는 JSON 스키마를 엄격히 준수하는 뉴스 프레임 분류기다.",
-          },
-          { role: "user", content: p },
-        ],
-      });
-      return completion.choices?.[0]?.message?.content?.trim() ?? "";
-    }, prompt);
 
-    modelAttempts = result.attempts;
-    modelOutput = result.parsed;
+    try {
+      const result = await classifyWithRetry(async (p) => {
+        const completion = await openai.chat.completions.create({
+          model: DEFAULT_MODEL,
+          temperature: 0.2,
+          messages: [
+            {
+              role: "system",
+              content: "너는 JSON 스키마를 엄격히 준수하는 뉴스 프레임 분류기다.",
+            },
+            { role: "user", content: p },
+          ],
+        });
+        return completion.choices?.[0]?.message?.content?.trim() ?? "";
+      }, prompt);
+
+      modelAttempts = result.attempts;
+      modelOutput = result.parsed;
+    } catch (err) {
+      console.warn("[issue-frame-groups] model classification failed, fallback will be used", {
+        issueId,
+        model: DEFAULT_MODEL,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const fallback = buildFallback(sampledArticles);
