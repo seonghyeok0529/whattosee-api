@@ -266,7 +266,7 @@ issuesRouter.get("/", async (req, res) => {
   res.json({ items: sliced, nextCursor });
 });
 
-issuesRouter.post("/:issueId/frame-groups", async (req, res) => {
+async function handleIssueFrameGroups(req: any, res: any, method: "GET" | "POST") {
   try {
     const { issueId } = req.params;
     const force = String(req.query.force ?? "false").toLowerCase() === "true";
@@ -278,9 +278,17 @@ issuesRouter.post("/:issueId/frame-groups", async (req, res) => {
       return res.status(404).json({ error: "NOT_FOUND" });
     }
 
-    console.error("POST /issues/:issueId/frame-groups error", err);
+    console.error(`${method} /issues/:issueId/frame-groups error`, err);
     return res.status(500).json({ error: "INTERNAL_ERROR" });
   }
+}
+
+issuesRouter.post("/:issueId/frame-groups", async (req, res) => {
+  return handleIssueFrameGroups(req, res, "POST");
+});
+
+issuesRouter.get("/:issueId/frame-groups", async (req, res) => {
+  return handleIssueFrameGroups(req, res, "GET");
 });
 
 /**
