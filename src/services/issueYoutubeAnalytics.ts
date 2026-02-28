@@ -1,4 +1,5 @@
 import axios from "axios";
+import { IssueStatus } from "@prisma/client";
 import prisma from "../lib/prisma.js";
 import { openai, DEFAULT_MODEL } from "../lib/openai.js";
 import { extractKeywords } from "../pipelines/news/util/keywords.js";
@@ -368,6 +369,18 @@ async function classifyCommentDistribution(comments: string[]) {
 }
 
 export async function getIssueYoutubeAnalyticsCache(issueId: string) {
+  const publishedIssue = await prisma.issue.findFirst({
+    where: {
+      id: issueId,
+      status: IssueStatus.PUBLISHED,
+    },
+    select: { id: true },
+  });
+
+  if (!publishedIssue) {
+    return null;
+  }
+
   const now = new Date();
   const cache = await prisma.issueYoutubeAnalyticsCache.findUnique({
     where: { issueId },
@@ -410,10 +423,11 @@ export async function getOrCreateIssueYoutubeAnalytics(issueId: string, options?
       title: true,
       summary: true,
       tags: true,
+      status: true,
     },
   });
 
-  if (!issue) {
+  if (!issue || issue.status !== IssueStatus.PUBLISHED) {
     throw new Error("ISSUE_NOT_FOUND");
   }
 
