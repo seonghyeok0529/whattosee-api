@@ -10,17 +10,17 @@ import {
 export const adminIssueYoutubeRoutes = Router();
 
 adminIssueYoutubeRoutes.get(
-  "/issues/:issueId/youtube/analyze",
+  "/clip-issues/:clipIssueId/youtube/analyze",
   requireAuth,
   adminAuth,
   async (req, res) => {
     try {
-      const issueId = String(req.params.issueId ?? "").trim();
-      if (!issueId) {
-        return res.status(400).json({ ok: false, error: "INVALID_ISSUE_ID" });
+      const clipIssueId = String(req.params.clipIssueId ?? "").trim();
+      if (!clipIssueId) {
+        return res.status(400).json({ ok: false, error: "INVALID_CLIP_ISSUE_ID" });
       }
 
-      const cached = await getIssueYoutubeAnalyticsCache(issueId);
+      const cached = await getIssueYoutubeAnalyticsCache(clipIssueId);
       if (!cached) {
         return res.status(404).json({ ok: false, error: "YOUTUBE_ANALYTICS_CACHE_NOT_FOUND" });
       }
@@ -34,24 +34,24 @@ adminIssueYoutubeRoutes.get(
 );
 
 adminIssueYoutubeRoutes.post(
-  "/issues/:issueId/youtube/analyze",
+  "/clip-issues/:clipIssueId/youtube/analyze",
   requireAuth,
   adminAuth,
   async (req, res) => {
     try {
-      const issueId = String(req.params.issueId ?? "").trim();
-      if (!issueId) {
-        return res.status(400).json({ ok: false, error: "INVALID_ISSUE_ID" });
+      const clipIssueId = String(req.params.clipIssueId ?? "").trim();
+      if (!clipIssueId) {
+        return res.status(400).json({ ok: false, error: "INVALID_CLIP_ISSUE_ID" });
       }
 
       const force = parseForceQuery(req.query.force);
-      const payload = await getOrCreateIssueYoutubeAnalytics(issueId, { force });
+      const payload = await getOrCreateIssueYoutubeAnalytics(clipIssueId, { force });
       return res.json(payload);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
-      if (message === "ISSUE_NOT_FOUND") {
-        return res.status(404).json({ ok: false, error: "ISSUE_NOT_FOUND" });
+      if (message === "CLIP_ISSUE_NOT_FOUND") {
+        return res.status(404).json({ ok: false, error: "CLIP_ISSUE_NOT_FOUND" });
       }
 
       if (message === "YOUTUBE_API_KEY_MISSING") {
