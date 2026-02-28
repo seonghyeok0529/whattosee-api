@@ -419,7 +419,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     if (cached) return cached;
   }
 
-  const issue = await prisma.issue.findUnique({
+  const issue = (await prisma.issue.findUnique({
     where: { id: clipIssueId },
     select: ISSUE_ANALYTICS_SELECT,
   });
@@ -435,8 +435,8 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
 
   const query = pickIssueKeywords({
     title: issue.title,
-    description: issue.summary ?? issue.body ?? null,
-    category: null,
+    description: issue.summary ?? issue.body ?? issue.description ?? null,
+    category: issue.category ?? null,
   });
   const maxVideos = DEFAULT_MAX_VIDEOS;
   const maxComments = DEFAULT_MAX_COMMENTS;
