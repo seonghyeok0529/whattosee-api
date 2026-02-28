@@ -1,4 +1,5 @@
 import axios from "axios";
+import { IssueStatus } from "@prisma/client";
 import prisma from "../lib/prisma.js";
 import { openai, DEFAULT_MODEL } from "../lib/openai.js";
 import { extractKeywords } from "../pipelines/news/util/keywords.js";
@@ -420,7 +421,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     },
   });
 
-  if (!issue) {
+  if (!issue || issue.status !== IssueStatus.PUBLISHED) {
     throw new Error("ISSUE_NOT_FOUND");
   }
 
