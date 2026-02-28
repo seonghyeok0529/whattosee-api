@@ -701,6 +701,37 @@ model ClipIssue {
   // 🔥 새 컨텐츠 모듈
   talkingPoints ClipIssueTalkingPoint[]
   sensemaking   ClipIssueSensemaking?
+
+  youtubeIngests       ClipIssueYoutubeIngest[]
+  youtubeAnalyticsCache ClipIssueYoutubeAnalyticsCache?
+}
+
+model ClipIssueYoutubeIngest {
+  id           String    @id @default(cuid())
+  clipIssueId  String
+  clipIssue    ClipIssue @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+
+  fetchedAt    DateTime
+  params       Json
+  videoCount   Int
+  commentCount Int
+  createdAt    DateTime  @default(now())
+
+  @@index([clipIssueId, fetchedAt])
+}
+
+model ClipIssueYoutubeAnalyticsCache {
+  id          String    @id @default(cuid())
+  clipIssueId String    @unique
+  clipIssue   ClipIssue @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+
+  payload     Json
+  generatedAt DateTime
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([expiresAt])
 }
 
 model ClipIssueRelation {

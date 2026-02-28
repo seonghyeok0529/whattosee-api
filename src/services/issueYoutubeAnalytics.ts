@@ -376,7 +376,7 @@ export async function getIssueYoutubeAnalyticsCache(clipIssueId: string) {
   }
 
   const now = new Date();
-  const cache = await prisma.issueYoutubeAnalyticsCache.findUnique({
+  const cache = await prisma.clipIssueYoutubeAnalyticsCache.findUnique({
     where: { clipIssueId },
     select: {
       payload: true,
@@ -512,7 +512,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     },
   };
 
-  await prisma.issueYoutubeIngest.create({
+  await prisma.clipIssueYoutubeIngest.create({
     data: {
       clipIssueId,
       fetchedAt: now,
@@ -528,7 +528,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     },
   });
 
-  await prisma.issueYoutubeAnalyticsCache.upsert({
+  await prisma.clipIssueYoutubeAnalyticsCache.upsert({
     where: { clipIssueId },
     update: {
       payload,
