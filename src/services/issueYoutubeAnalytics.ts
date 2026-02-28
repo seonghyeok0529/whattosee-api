@@ -430,7 +430,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     throw new Error("YOUTUBE_API_KEY_MISSING");
   }
 
-  const query = pickIssueKeywords(issue);
+  const query = pickIssueKeywords(clipIssue);
   const maxVideos = DEFAULT_MAX_VIDEOS;
   const maxComments = DEFAULT_MAX_COMMENTS;
   const publishedAfter = toIsoDate(DEFAULT_LOOKBACK_DAYS);
