@@ -17,7 +17,7 @@ adminIssueYoutubeRoutes.get(
     try {
       const clipIssueId = String(req.params.clipIssueId ?? "").trim();
       if (!clipIssueId) {
-        return res.status(400).json({ ok: false, error: "INVALID_ISSUE_ID" });
+        return res.status(400).json({ ok: false, error: "INVALID_CLIP_ISSUE_ID" });
       }
 
       const cached = await getIssueYoutubeAnalyticsCache(clipIssueId);
@@ -41,7 +41,7 @@ adminIssueYoutubeRoutes.post(
     try {
       const clipIssueId = String(req.params.clipIssueId ?? "").trim();
       if (!clipIssueId) {
-        return res.status(400).json({ ok: false, error: "INVALID_ISSUE_ID" });
+        return res.status(400).json({ ok: false, error: "INVALID_CLIP_ISSUE_ID" });
       }
 
       const force = parseForceQuery(req.query.force);
@@ -50,8 +50,8 @@ adminIssueYoutubeRoutes.post(
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
-      if (message === "ISSUE_NOT_FOUND") {
-        return res.status(404).json({ ok: false, error: "ISSUE_NOT_FOUND" });
+      if (message === "CLIP_ISSUE_NOT_FOUND") {
+        return res.status(404).json({ ok: false, error: "CLIP_ISSUE_NOT_FOUND" });
       }
 
       if (message === "YOUTUBE_API_KEY_MISSING") {
