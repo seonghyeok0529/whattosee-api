@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import axios from "axios";
 import prisma from "../lib/prisma.js";
 import { openai, DEFAULT_MODEL } from "../lib/openai.js";
@@ -14,6 +15,14 @@ const DEFAULT_LOOKBACK_DAYS = 30;
 type AnalyzeOptions = {
   force?: boolean;
 };
+
+const ISSUE_ANALYTICS_SELECT = {
+  id: true,
+  title: true,
+  summary: true,
+  body: true,
+  status: true,
+} satisfies Prisma.IssueSelect;
 
 type YoutubeVideoLite = {
   videoId: string;
@@ -412,24 +421,8 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
 
   const issue = (await prisma.issue.findUnique({
     where: { id: clipIssueId },
-    select: {
-      id: true,
-      title: true,
-      summary: true,
-      body: true,
-      status: true,
-    },
-  })) as
-    | {
-        id: string;
-        title: string;
-        summary?: string | null;
-        body?: string | null;
-        description?: string | null;
-        category?: string | null;
-        status?: string | null;
-      }
-    | null;
+    select: ISSUE_ANALYTICS_SELECT,
+  });
 
   if (!issue || issue.status !== "PUBLISHED") {
     throw new Error("ISSUE_NOT_FOUND");
