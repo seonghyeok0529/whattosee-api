@@ -1,7 +1,7 @@
 import axios from "axios";
-import prisma from "@/lib/prisma.js";
-import { openai, DEFAULT_MODEL } from "@/lib/openai.js";
-import { extractKeywords } from "@/pipelines/news/util/keywords.js";
+import prisma from "../lib/prisma.js";
+import { openai, DEFAULT_MODEL } from "../lib/openai.js";
+import { extractKeywords } from "../pipelines/news/util/keywords.js";
 
 const YT_BASE = "https://www.googleapis.com/youtube/v3";
 const YT_RETRY_LIMIT = 2;

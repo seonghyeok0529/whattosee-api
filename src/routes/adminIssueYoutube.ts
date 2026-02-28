@@ -1,11 +1,11 @@
 import { Router } from "express";
-import { requireAuth } from "@/middleware/requireAuth.js";
-import { adminAuth } from "@/middleware/adminAuth.js";
+import { requireAuth } from "../middleware/requireAuth.js";
+import { adminAuth } from "../middleware/adminAuth.js";
 import {
   getIssueYoutubeAnalyticsCache,
   getOrCreateIssueYoutubeAnalytics,
   parseForceQuery,
-} from "@/services/issueYoutubeAnalytics.js";
+} from "../services/issueYoutubeAnalytics.js";
 
 export const adminIssueYoutubeRoutes = Router();
 
