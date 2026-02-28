@@ -417,6 +417,15 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
       title: true,
       description: true,
       category: true,
+      clips: {
+        select: {
+          rawClip: {
+            select: {
+              youtubeId: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -434,12 +443,23 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
   const maxComments = DEFAULT_MAX_COMMENTS;
   const publishedAfter = toIsoDate(DEFAULT_LOOKBACK_DAYS);
 
-  const videoIds = await searchVideos({
-    apiKey,
-    query,
-    maxVideos,
-    publishedAfter,
-  });
+  const linkedVideoIds = Array.from(
+    new Set(
+      (clipIssue.clips ?? [])
+        .map((clip) => clip.rawClip?.youtubeId?.trim())
+        .filter((id): id is string => !!id)
+    )
+  );
+
+  const videoIds =
+    linkedVideoIds.length > 0
+      ? linkedVideoIds.slice(0, maxVideos)
+      : await searchVideos({
+          apiKey,
+          query,
+          maxVideos,
+          publishedAfter,
+        });
 
   const videos = await fetchVideoDetails(apiKey, videoIds);
 
