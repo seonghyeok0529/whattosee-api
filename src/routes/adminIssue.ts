@@ -138,7 +138,10 @@ adminIssueRoutes.get(
   adminAuth,
   async (req: Request, res: Response) => {
     const statusRaw = (req.query.status as string | undefined)?.trim();
-    const q = (req.query.q as string | undefined)?.trim() ?? "";
+    const q =
+      (req.query.q as string | undefined)?.trim() ??
+      (req.query.query as string | undefined)?.trim() ??
+      "";
     const sort = (req.query.sort as string | undefined) || "latest";
     const takeRaw = parseInt((req.query.take as string) ?? "20", 10);
     const take = Math.min(isNaN(takeRaw) ? 20 : takeRaw, 100);
