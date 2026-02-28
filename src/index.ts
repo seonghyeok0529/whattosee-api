@@ -31,6 +31,7 @@ import clipIssueCommentsRouter from "./routes/clipIssueComments.js";
 import adminNewsClipsRouter from "./routes/adminNewsClips.js";
 import communityRoutes from "./routes/community.js";
 import adminCommunityRouter from "./routes/adminCommunity.js";
+import { adminIssueYoutubeRoutes } from "./routes/adminIssueYoutube.js";
 
 import { ensureSession } from "./middleware/ensureSession";
 
@@ -136,6 +137,7 @@ app.use("/api/news-clips", newsClipsRouter);
 app.use("/api", clipIssueCommentsRouter);
 app.use("/api/admin", adminNewsClipsRouter);
 app.use("/api/admin", adminCommunityRouter);
+app.use("/api/admin", adminIssueYoutubeRoutes);
 app.use("/api", communityRoutes);
 
 /* ======================================================

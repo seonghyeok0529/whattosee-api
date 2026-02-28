@@ -1,13 +1,11 @@
-// src/lib/irtScoring40.ts
-import type { IrtAxis } from "../data/irtQuestions";
-import type { AnswerValue, IRTAnswers, IRTScores } from "./irtScoring";
-import { clamp } from "./irtScoring";
-import { irtQuestions } from "../data/irtQuestions";
-import { IRT40_LIKERT_IDS, IRT40_SWITCH_IDS, IRT40_FORCED_IDS } from "../data/irt40";
+import type { IrtAxis } from "./irt/data/irtQuestions.js";
+import type { AnswerValue, IRTAnswers, IRTScores } from "./irtScoring.js";
+import { clamp } from "./irtScoring.js";
+import { irtQuestions } from "./irt/data/irtQuestions.js";
+import { IRT40_LIKERT_IDS, IRT40_SWITCH_IDS, IRT40_FORCED_IDS } from "./irt/data/irt40.js";
 
 const AXES: IrtAxis[] = ["I", "C", "S", "H"];
 
-// likert 1~7 -> 0~1
 function norm01(v: number) {
   return (v - 1) / 6;
 }
@@ -20,11 +18,7 @@ function isAB(v: AnswerValue | undefined): v is "A" | "B" {
   return v === "A" || v === "B";
 }
 
-/**
- * Forced 보정 강도 (0~100 스케일에서 ±4점 정도 권장)
- * - 너무 크면 forced가 타입을 뒤집어버림
- */
-export const FORCED_WEIGHT_POINTS = 4; // ±4
+export const FORCED_WEIGHT_POINTS = 4;
 export const RISK_SCENARIO_WEIGHT = 1.2;
 
 export function computeIrt40Scores(answers: IRTAnswers): IRTScores {
@@ -54,7 +48,6 @@ export function computeIrt40Scores(answers: IRTAnswers): IRTScores {
     }
   }
 
-  // ---- forced 보정 (약하게) ----
   const forcedAdj = computeIrt40ForcedAdjustment(answers);
   for (const ax of AXES) {
     out[ax] = clamp(out[ax] + forcedAdj[ax], 0, 100);
@@ -63,11 +56,6 @@ export function computeIrt40Scores(answers: IRTAnswers): IRTScores {
   return out;
 }
 
-/**
- * forced는 문항 option.pole이 left/right
- * - right 선택: +FORCED_WEIGHT_POINTS
- * - left 선택: -FORCED_WEIGHT_POINTS
- */
 export function computeIrt40ForcedAdjustment(answers: IRTAnswers): Record<IrtAxis, number> {
   const adj: Record<IrtAxis, number> = { I: 0, C: 0, S: 0, H: 0 };
 
@@ -77,7 +65,7 @@ export function computeIrt40ForcedAdjustment(answers: IRTAnswers): Record<IrtAxi
     const v = answers[id];
     if (!q || (q.type ?? "likert") !== "forced" || !isAB(v)) continue;
 
-    const picked = q.options.find((o) => o.key === v);
+    const picked = q.options?.find((o) => o.key === v);
     if (!picked) continue;
 
     adj[ax] = picked.pole === "right" ? +FORCED_WEIGHT_POINTS : -FORCED_WEIGHT_POINTS;
@@ -106,12 +94,7 @@ export function computeIrt40Switchiness(answers: IRTAnswers) {
   }
 
   const avg = valsAll.length ? valsAll.reduce((a, b) => a + b, 0) / valsAll.length : null;
-
-  // 라벨링(결과 UI용)
-  const level =
-    avg == null ? "UNKNOWN" :
-    avg >= 5.0 ? "HIGH" :
-    avg >= 3.8 ? "MEDIUM" : "LOW";
+  const level = avg == null ? "UNKNOWN" : avg >= 5.0 ? "HIGH" : avg >= 3.8 ? "MEDIUM" : "LOW";
 
   return { avg, byAxis, level, answered: valsAll.length, total: 8 };
 }
@@ -123,8 +106,6 @@ export function deriveIrtType40(scores: IRTScores) {
   const H = scores.H >= 50 ? "ME" : "FA";
   return `${I}-${C}-${S}-${H}`;
 }
-
-// ---- 결과 UI에서 바로 쓰는 “한 문장/태그라인” ----
 
 export function poleForAxis(axis: IrtAxis, v: number) {
   if (axis === "I") return v >= 50 ? "Macro" : "Micro";
