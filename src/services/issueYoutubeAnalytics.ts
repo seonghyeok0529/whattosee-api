@@ -410,7 +410,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     if (cached) return cached;
   }
 
-  const issue = await prisma.issue.findUnique({
+  const issue = (await prisma.issue.findUnique({
     where: { id: clipIssueId },
     select: {
       id: true,
@@ -419,7 +419,17 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
       body: true,
       status: true,
     },
-  });
+  })) as
+    | {
+        id: string;
+        title: string;
+        summary?: string | null;
+        body?: string | null;
+        description?: string | null;
+        category?: string | null;
+        status?: string | null;
+      }
+    | null;
 
   if (!issue || issue.status !== "PUBLISHED") {
     throw new Error("ISSUE_NOT_FOUND");
@@ -432,8 +442,8 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
 
   const query = pickIssueKeywords({
     title: issue.title,
-    description: issue.summary ?? issue.body ?? null,
-    category: null,
+    description: issue.summary ?? issue.body ?? issue.description ?? null,
+    category: issue.category ?? null,
   });
   const maxVideos = DEFAULT_MAX_VIDEOS;
   const maxComments = DEFAULT_MAX_COMMENTS;
