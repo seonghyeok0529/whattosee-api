@@ -366,18 +366,18 @@ async function classifyCommentDistribution(comments: string[]) {
 }
 
 export async function getIssueYoutubeAnalyticsCache(clipIssueId: string) {
-  const clipIssue = await prisma.clipIssue.findUnique({
+  const issue = await prisma.issue.findUnique({
     where: { id: clipIssueId },
     select: { id: true },
   });
 
-  if (!clipIssue) {
+  if (!issue) {
     return null;
   }
 
   const now = new Date();
   const cache = await prisma.issueYoutubeAnalyticsCache.findUnique({
-    where: { clipIssueId },
+    where: { issueId: clipIssueId },
     select: {
       payload: true,
       generatedAt: true,
@@ -410,17 +410,18 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     if (cached) return cached;
   }
 
-  const clipIssue = await prisma.clipIssue.findUnique({
+  const issue = await prisma.issue.findUnique({
     where: { id: clipIssueId },
     select: {
       id: true,
       title: true,
-      description: true,
-      category: true,
+      summary: true,
+      body: true,
+      status: true,
     },
   });
 
-  if (!clipIssue) {
+  if (!issue || issue.status !== "PUBLISHED") {
     throw new Error("ISSUE_NOT_FOUND");
   }
 
@@ -429,7 +430,11 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
     throw new Error("YOUTUBE_API_KEY_MISSING");
   }
 
-  const query = pickIssueKeywords(clipIssue);
+  const query = pickIssueKeywords({
+    title: issue.title,
+    description: issue.summary ?? issue.body ?? null,
+    category: null,
+  });
   const maxVideos = DEFAULT_MAX_VIDEOS;
   const maxComments = DEFAULT_MAX_COMMENTS;
   const publishedAfter = toIsoDate(DEFAULT_LOOKBACK_DAYS);
@@ -464,7 +469,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
       }
     } catch (err) {
       console.warn("[issue-youtube-analytics] comment fetch failed", {
-        clipIssueId,
+        issueId: clipIssueId,
         videoId: video.videoId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -514,7 +519,7 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
 
   await prisma.issueYoutubeIngest.create({
     data: {
-      clipIssueId,
+      issueId: clipIssueId,
       fetchedAt: now,
       params: {
         query,
@@ -529,14 +534,14 @@ export async function getOrCreateIssueYoutubeAnalytics(clipIssueId: string, opti
   });
 
   await prisma.issueYoutubeAnalyticsCache.upsert({
-    where: { clipIssueId },
+    where: { issueId: clipIssueId },
     update: {
       payload,
       generatedAt: now,
       expiresAt: new Date(now.getTime() + CACHE_TTL_MS),
     },
     create: {
-      clipIssueId,
+      issueId: clipIssueId,
       payload,
       generatedAt: now,
       expiresAt: new Date(now.getTime() + CACHE_TTL_MS),
