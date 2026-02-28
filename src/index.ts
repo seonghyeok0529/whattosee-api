@@ -4,7 +4,7 @@ import cors from "cors";
 import morgan from "morgan";
 import dotenv from "dotenv";
 import cookieParser from "cookie-parser";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@prisma/client"; 
 
 dotenv.config();
 
