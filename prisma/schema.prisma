@@ -340,25 +340,27 @@ model Issue {
   sensemaking   IssueSensemaking?
 
   frameGroupCache IssueFrameGroupCache?
+  youtubeIngests  IssueYoutubeIngest[]
+  youtubeAnalyticsCache IssueYoutubeAnalyticsCache?
 }
 
 model IssueYoutubeIngest {
   id           String   @id @default(cuid())
-  clipIssueId  String
-  clipIssue    ClipIssue @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+  issueId      String
+  issue        Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
   fetchedAt    DateTime
   params       Json
   videoCount   Int
   commentCount Int
   createdAt    DateTime @default(now())
 
-  @@index([clipIssueId, fetchedAt])
+  @@index([issueId, fetchedAt])
 }
 
 model IssueYoutubeAnalyticsCache {
   id          String   @id @default(cuid())
-  clipIssueId String   @unique
-  clipIssue   ClipIssue @relation(fields: [clipIssueId], references: [id], onDelete: Cascade)
+  issueId     String   @unique
+  issue       Issue    @relation(fields: [issueId], references: [id], onDelete: Cascade)
   payload     Json
   generatedAt DateTime
   expiresAt   DateTime
@@ -699,8 +701,6 @@ model ClipIssue {
   // 🔥 새 컨텐츠 모듈
   talkingPoints ClipIssueTalkingPoint[]
   sensemaking   ClipIssueSensemaking?
-  youtubeIngests  IssueYoutubeIngest[]
-  youtubeAnalyticsCache IssueYoutubeAnalyticsCache?
 }
 
 model ClipIssueRelation {
