@@ -609,12 +609,41 @@ model RawClip {
   suggestions ClipClusterSuggestionItem[]
 
   clipLinks   ClipIssueClip[]
+  comments    RawClipComment[]
 
   // 🔥 뉴스 클립 열람 로그 역참조
   viewLogs    NewsClipViewLog[]
 
   @@index([status])
   @@index([clusterKey])
+}
+
+model RawClipComment {
+  id          String   @id @default(cuid())
+  rawClipId   String
+  rawClip     RawClip  @relation(fields: [rawClipId], references: [id], onDelete: Cascade)
+
+  youtubeCommentId String @unique
+  authorChannelId  String?
+  authorName       String?
+  text             String
+  likeCount        Int      @default(0)
+  publishedAt      DateTime?
+
+  reactionScores Json?
+  reactionLabel  Json?
+
+  isDeleted Boolean @default(false)
+  textHash  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([rawClipId])
+  @@index([rawClipId, publishedAt])
+  @@index([rawClipId, likeCount])
+  @@index([authorChannelId])
+  @@index([textHash])
 }
 
 enum ClipClusterStatus {
