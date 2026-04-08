@@ -95,3 +95,42 @@ What to See는 뉴스 기사 단위가 아니라 **이슈 단위로 정보를 �
 
 ```bash
 npm install
+2) 환경 변수 설정
+
+.env 파일 생성
+
+DATABASE_URL=your_database_url
+OPENAI_API_KEY=your_api_key
+3) Prisma 설정
+npx prisma generate
+npx prisma migrate deploy
+4) 서버 실행
+npm run dev
+```
+
+## 🔗 7. 관련 레포지토리
+Web Frontend: https://github.com/seonghyeok0529/whattosee-front
+Mobile App: https://github.com/seonghyeok0529/whattosee-app
+
+## 🚀 8. 향후 개발 계획
+이슈 자동 생성 및 고도화된 클러스터링
+프레임 분석 정확도 개선
+사용자 맞춤형 관점 추천 알고리즘
+정책 및 공공 데이터 분석 플랫폼 확장 (B2G/B2B)
+
+## 📊 9. 프로젝트 의의
+
+What to See는 단순한 뉴스 서비스가 아니라,
+이슈를 구조적으로 이해하고 다양한 해석을 비교할 수 있는 데이터 플랫폼을 지향합니다.
+
+이를 통해 사용자에게는
+
+균형 잡힌 정보 소비
+자기 인식 기반 판단
+을 제공하고,
+
+장기적으로는
+
+정책 분석
+사회 데이터 인사이트 제공
+까지 확장할 수 있는 기반을 구축합니다.
