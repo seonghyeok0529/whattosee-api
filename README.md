@@ -54,7 +54,7 @@ What to See는 뉴스 기사 단위가 아니라 **이슈 단위로 정보를 �
   - 해석: fault ↔ meaning  
 
 - XGBoost 기반 모델을 활용해  
-  **Accuracy 약 74~75%, AUC 0.73~0.78 수준의 예측 성능 검증**
+  **Accuracy 약 75%, AUC 0.78 수준의 예측 성능 검증**
 
 ---
 
