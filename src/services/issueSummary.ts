@@ -22,13 +22,27 @@ export async function getOrCreateIssueSummary(issueId: string, opts: SummarizeOp
   const issue = await prisma.issue.findUnique({
     where: { id: issueId },
     include: {
-      sources: { select: { outlet: true, title: true, url: true, side: true }, take: 20 },
+      sources: {
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: { outlet: true, title: true, url: true, side: true, createdAt: true },
+      },
     },
   });
   if (!issue) throw new Error("ISSUE_NOT_FOUND");
 
   // ---------- 1) Cache ----------
   if (!force && issue.summary) {
+    const summaryGeneratedAt = issue.updatedAt ? new Date(issue.updatedAt) : null;
+    const hasNewSourceData =
+      summaryGeneratedAt === null
+        ? issue.sources.length > 0
+        : issue.sources.some((s) => s.createdAt.getTime() > summaryGeneratedAt.getTime());
+
+    if (!hasNewSourceData) {
+      return { summary: issue.summary, cached: true };
+    }
+
     const fresh =
       issue.updatedAt &&
       (Date.now() - new Date(issue.updatedAt).getTime()) / (1000 * 60) < ttlMinutes;
