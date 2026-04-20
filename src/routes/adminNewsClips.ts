@@ -20,7 +20,8 @@ import { OpenAI } from "openai";
 const router = Router();
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
 });
 
 /* ----------------------------------------------------
@@ -492,7 +493,7 @@ ${clipsSummary || "(클립 정보 없음)"}
 `.trim();
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "solar-pro3",
         messages: [
           {
             role: "system",
@@ -642,7 +643,7 @@ ${clipsSummary || "(클립 정보 없음)"}
 
       const [tpCompletion, glossaryText] = await Promise.all([
         openai.chat.completions.create({
-          model: "gpt-4.1-mini",
+          model: "solar-pro3",
           messages: [
             {
               role: "system",
@@ -959,7 +960,7 @@ ${clipsSummary || "(클립 정보 없음)"}
 `.trim();
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "solar-pro3",
         messages: [
           {
             role: "system",
