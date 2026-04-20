@@ -1,6 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { classifyWithRetry, shouldUseFrameGroupCache } from "./issueFrameGroups.js";
+import {
+  classifyWithRetry,
+  hasNewSourcesSinceCache,
+  shouldUseFrameGroupCache,
+} from "./issueFrameGroups.js";
 
 test("cache hit/miss + force=true", () => {
   const now = new Date("2026-01-01T00:00:00.000Z");
@@ -35,4 +39,25 @@ test("JSON 파싱 실패 시 재시도 후 성공", async () => {
   assert.equal(result.attempts, 3);
   assert.ok(result.parsed);
   assert.equal(result.parsed?.groups.A[0]?.id, "a1");
+});
+
+test("새 소스가 없으면 만료 캐시도 재사용 가능", () => {
+  const cacheGeneratedAt = new Date("2026-01-01T01:00:00.000Z");
+  const oldSources = [
+    new Date("2026-01-01T00:30:00.000Z"),
+    new Date("2026-01-01T00:10:00.000Z"),
+  ];
+  const newSources = [
+    new Date("2026-01-01T00:30:00.000Z"),
+    new Date("2026-01-01T01:10:00.000Z"),
+  ];
+
+  assert.equal(
+    hasNewSourcesSinceCache({ sourceCreatedAts: oldSources, cacheGeneratedAt }),
+    false
+  );
+  assert.equal(
+    hasNewSourcesSinceCache({ sourceCreatedAts: newSources, cacheGeneratedAt }),
+    true
+  );
 });

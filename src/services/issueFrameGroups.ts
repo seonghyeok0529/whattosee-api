@@ -38,6 +38,16 @@ export function shouldUseFrameGroupCache(opts: {
   return opts.expiresAt.getTime() > opts.now.getTime();
 }
 
+export function hasNewSourcesSinceCache(opts: {
+  sourceCreatedAts: Date[];
+  cacheGeneratedAt: Date | null | undefined;
+}) {
+  if (!opts.cacheGeneratedAt) return opts.sourceCreatedAts.length > 0;
+  return opts.sourceCreatedAts.some(
+    (createdAt) => createdAt.getTime() > opts.cacheGeneratedAt!.getTime()
+  );
+}
+
 const frameSchema = z.object({
   groups: z.object({
     A: z.array(z.object({ id: z.string() })),
@@ -214,7 +224,25 @@ export async function getOrCreateIssueFrameGroups(issueId: string, force = false
 
   if (!issue) throw new Error("ISSUE_NOT_FOUND");
 
-  if (shouldUseFrameGroupCache({ force, expiresAt: issue.frameGroupCache?.expiresAt, now }) && issue.frameGroupCache) {
+  const sourceCreatedAts = issue.sources.map((s) => s.createdAt).filter((d): d is Date => d instanceof Date);
+  const hasNewSources = hasNewSourcesSinceCache({
+    sourceCreatedAts,
+    cacheGeneratedAt: issue.frameGroupCache?.generatedAt,
+  });
+
+  const canUseCachedPayload =
+    !!issue.frameGroupCache &&
+    !force &&
+    (
+      shouldUseFrameGroupCache({
+        force,
+        expiresAt: issue.frameGroupCache.expiresAt,
+        now,
+      }) ||
+      !hasNewSources
+    );
+
+  if (canUseCachedPayload && issue.frameGroupCache) {
     const payload = issue.frameGroupCache.payload as Omit<FrameGroupsResponse, "meta">;
     const response: FrameGroupsResponse = {
       ...payload,
