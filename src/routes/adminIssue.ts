@@ -15,7 +15,8 @@ import { OpenAI } from "openai";
 import { refreshIssueGlossary } from "../services/issueGlossary";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
 });
 
 export const adminIssueRoutes = Router();
@@ -1184,7 +1185,7 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
 `;
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "solar-pro3",
         messages: [
           {
             role: "system",
@@ -1314,7 +1315,7 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
 `;
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "solar-pro3",
         messages: [
           {
             role: "system",
@@ -1661,7 +1662,7 @@ ${talkingPointsJson}
 `;
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-4.1-mini",
+        model: "solar-pro3",
         messages: [
           {
             role: "system",
@@ -1826,7 +1827,7 @@ ${articlesSummary || "(기사 메타 정보 없음)"}
 `;
 
   const completion = await openai.chat.completions.create({
-    model: "gpt-4.1-mini",
+    model: "solar-pro3",
     messages: [
       {
         role: "system",

@@ -1,7 +1,10 @@
 import { prisma } from "../lib/prisma";
 import OpenAI from "openai";
 
-const openai = new OpenAI();
+const openai = new OpenAI({
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
+});
 
 export async function generateSideSummary(issueId: string, side: "left" | "right") {
   const sources = await prisma.source.findMany({
@@ -40,7 +43,7 @@ export async function generateSideSummary(issueId: string, side: "left" | "right
   const content = articles.map((a,i)=>`[${i+1}] (${a.outlet}) ${a.title}\n${a.text?.slice(0,1200)}`).join("\n\n");
 
   const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "solar-pro3",
     messages: [
       { role:"system", content:"You are an expert news sentiment analyzer." },
       { role:"user", content: prompt + "\n\n" + content }

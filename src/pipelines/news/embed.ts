@@ -2,7 +2,10 @@
 import prisma from "../../lib/prisma.js";
 import OpenAI from "openai";
 
-const openai = new OpenAI();
+const openai = new OpenAI({
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
+});
 
 export async function embedArticles(limit = 30) {
   const items = await prisma.rawArticle.findMany({

@@ -100,7 +100,7 @@ npm install
 .env 파일 생성
 
 DATABASE_URL=your_database_url
-OPENAI_API_KEY=your_api_key
+UPSTAGE_API_KEY=your_api_key
 3) Prisma 설정
 npx prisma generate
 npx prisma migrate deploy

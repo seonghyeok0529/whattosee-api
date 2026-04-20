@@ -1,7 +1,10 @@
 // src/pipelines/news/summarize.ts
 import OpenAI from "openai";
 
-const openai = new OpenAI();
+const openai = new OpenAI({
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
+});
 
 export async function summarizeCluster(docs: {title:string; outlet:string; url:string; text:string}[]) {
   const prompt = `당신은 전문 뉴스 분석가입니다.
@@ -51,7 +54,7 @@ ${docs.map((d,i)=>`[${i+1}] (${d.outlet}) ${d.title}\nURL: ${d.url}\n본문:\n${
 `;
 
   const r = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "solar-pro3",
     messages: [{ role:"user", content: prompt }],
     temperature: 0.2,
     response_format: { type: "json_object" as any },

@@ -6,7 +6,8 @@ import OpenAI from "openai";
 import crypto from "crypto";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
 });
 
 /* ─────────────────────────────────────────────

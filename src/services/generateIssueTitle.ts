@@ -2,7 +2,8 @@ import { OpenAI } from "openai";
 import type { Issue, Source } from "@prisma/client";
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
 });
 
 export async function generateIssueTitle(issue: Issue & { sources: Source[] }) {
@@ -33,7 +34,7 @@ ${titles}
 `.trim();
 
   const res = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+    model: "solar-pro3",
     messages: [
       {
         role: "system",

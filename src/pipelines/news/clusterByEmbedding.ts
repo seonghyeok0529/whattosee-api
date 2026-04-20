@@ -6,7 +6,7 @@ import type { RawArticleLite, Cluster } from "./types.js";
 
 /**
  * ENV
- * - OPENAI_API_KEY
+ * - UPSTAGE_API_KEY
  * - NEWS_CLUSTER_EMBED_MODEL (default: "text-embedding-3-small")
  * - NEWS_CLUSTER_BATCH (default: 64, 8~256)
  * - NEWS_CLUSTER_SIM_THRESHOLD (default: 0.82, 0.5~0.99)
@@ -18,7 +18,10 @@ const BATCH = Math.min(Math.max(Number(process.env.NEWS_CLUSTER_BATCH ?? 64), 8)
 const MAX_N = Math.min(Number(process.env.NEWS_CLUSTER_MAX_ARTICLES ?? 1000), 5000);
 const SIM_T = Math.min(Math.max(Number(process.env.NEWS_CLUSTER_SIM_THRESHOLD ?? 0.82), 0.5), 0.99);
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const client = new OpenAI({
+  apiKey: process.env.UPSTAGE_API_KEY,
+  baseURL: "https://api.upstage.ai/v1",
+});
 
 /** 안전한 텍스트 구성: 제목 + (요약 또는 본문 일부), 과도한 길이 제한 */
 function articleText(a: RawArticleLite): string {
